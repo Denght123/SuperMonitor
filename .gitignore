@@ -1,0 +1,44 @@
+# Secrets and environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+auth-exports/
+
+# Runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+backups/
+logs/
+diagnostics/
+
+# Go
+bin/
+coverage.out
+*.test
+
+# Web
+web/node_modules/
+web/dist/
+web/coverage/
+internal/webui/assets/*
+!internal/webui/assets/placeholder.txt
+
+# Tooling
+.impeccable/mocks/
+.impeccable/review/
+.impeccable/chrome-profile/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

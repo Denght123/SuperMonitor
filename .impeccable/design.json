@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-18T15:45:00+08:00",
+  "title": "Design System: SuperMonitor",
+  "extensions": {
+    "colorMeta": {
+      "graphite-bg": { "role": "neutral", "displayName": "Graphite Background", "canonical": "#090d14", "tonalRamp": ["#05080d", "#090d14", "#111923", "#223142", "#45566a", "#718196", "#aeb8c5", "#eaf0f7"] },
+      "instrument-surface": { "role": "neutral", "displayName": "Instrument Surface", "canonical": "#0e151f", "tonalRamp": ["#070b11", "#0e151f", "#172231", "#2a3a4d", "#526277", "#7e8da0", "#bac3cf", "#eef2f6"] },
+      "live-cyan": { "role": "primary", "displayName": "Live Cyan", "canonical": "#64dff5", "tonalRamp": ["#052b34", "#084653", "#0c6879", "#1591a7", "#2cb8d0", "#64dff5", "#a4edf8", "#e1faff"] },
+      "warning-amber": { "role": "tertiary", "displayName": "Warning Amber", "canonical": "#f0b45f", "tonalRamp": ["#311c03", "#523107", "#774b0f", "#a36c21", "#cf903b", "#f0b45f", "#f8d49d", "#fff3df"] },
+      "fault-coral": { "role": "tertiary", "displayName": "Fault Coral", "canonical": "#f47d91", "tonalRamp": ["#351018", "#571925", "#7d2939", "#a84055", "#d45d72", "#f47d91", "#f9b3bf", "#ffe5ea"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Page Display", "purpose": "Current page title and top-level context." },
+      "body": { "displayName": "Operational Body", "purpose": "Compact explanatory and recovery copy." },
+      "data": { "displayName": "Measurement Voice", "purpose": "Quota, balance, clock, and tabular numeric readings." }
+    },
+    "shadows": [
+      { "name": "overlay-ambient", "value": "0 28px 80px rgba(0,0,0,0.38)", "purpose": "Command palette and protected modal focus." },
+      { "name": "drawer-depth", "value": "-18px 0 48px rgba(0,0,0,0.28)", "purpose": "Separates the account drawer from the monitoring canvas." }
+    ],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Fast state transitions, drawers, panels, and command entry." },
+      { "name": "routine-duration", "value": "160ms", "purpose": "Hover, border, and color feedback." }
+    ],
+    "breakpoints": [
+      { "name": "compact-rail", "value": "1120px" },
+      { "name": "mobile-dock", "value": "840px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Cyan immediate action used once per operational context.",
+      "html": "<button class=\"ds-btn-primary\">REFRESH ALL</button>",
+      "css": ".ds-btn-primary{height:38px;padding:0 14px;border:1px solid #64dff5;border-radius:9px;background:#64dff5;color:#071016;font:700 12px Manrope,system-ui,sans-serif;transition:transform 120ms ease,filter 160ms ease}.ds-btn-primary:hover{filter:brightness(1.05)}.ds-btn-primary:active{transform:translateY(1px)}.ds-btn-primary:focus-visible{outline:2px solid #64dff5;outline-offset:3px}"
+    },
+    {
+      "name": "Secondary Action",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Quiet bordered action for supporting operations.",
+      "html": "<button class=\"ds-btn-secondary\">VIEW HISTORY</button>",
+      "css": ".ds-btn-secondary{min-height:34px;padding:0 12px;border:1px solid #223042;border-radius:9px;background:#0e151f;color:#a6b2c2;font:700 11px Manrope,system-ui,sans-serif;transition:background 160ms ease,border-color 160ms ease}.ds-btn-secondary:hover{background:#121b27;border-color:#315567}.ds-btn-secondary:focus-visible{outline:2px solid #64dff5;outline-offset:3px}"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "description": "Command-oriented search row with an explicit keyboard escape path.",
+      "html": "<label class=\"ds-search\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/></svg><input placeholder=\"Search accounts or providers\"><kbd>ESC</kbd></label>",
+      "css": ".ds-search{height:58px;display:grid;grid-template-columns:22px 1fr auto;align-items:center;gap:9px;padding:0 16px;border:1px solid #223042;border-radius:14px;background:#0e151f;color:#64dff5}.ds-search svg{width:18px;fill:none;stroke:currentColor;stroke-width:2}.ds-search input{border:0;outline:0;background:transparent;color:#eaf0f7;font:13px Manrope,system-ui,sans-serif}.ds-search input::placeholder{color:#6f7d90}.ds-search:focus-within{outline:2px solid #64dff5;outline-offset:3px}.ds-search kbd{padding:2px 5px;border:1px solid #223042;border-radius:4px;background:#0a1018;color:#6f7d90;font:9px Consolas,monospace}"
+    },
+    {
+      "name": "Active Navigation",
+      "kind": "nav",
+      "description": "Raised graphite destination with a cyan directional signal.",
+      "html": "<button class=\"ds-nav-active\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><rect x=\"3\" y=\"3\" width=\"7\" height=\"7\"/><rect x=\"14\" y=\"3\" width=\"7\" height=\"7\"/><rect x=\"3\" y=\"14\" width=\"7\" height=\"7\"/><rect x=\"14\" y=\"14\" width=\"7\" height=\"7\"/></svg><span>Overview</span></button>",
+      "css": ".ds-nav-active{width:180px;height:42px;display:grid;grid-template-columns:20px 1fr;align-items:center;gap:10px;padding:0 11px;border:1px solid #223042;border-radius:10px;background:#121b27;color:#eaf0f7;text-align:left;font:500 12px Manrope,system-ui,sans-serif}.ds-nav-active svg{width:18px;fill:none;stroke:#64dff5;stroke-width:1.8}.ds-nav-active:hover{background:#162130}.ds-nav-active:focus-visible{outline:2px solid #64dff5;outline-offset:3px}"
+    },
+    {
+      "name": "Quota Signal",
+      "kind": "custom",
+      "description": "Provider-native quota reading with provenance, reset timing, and semantic progress.",
+      "html": "<article class=\"ds-quota\"><div><span>Codex</span><i></i></div><strong>73%</strong><p>5h limit · community adapter</p><b><em></em></b><small>resets in 2 hours</small></article>",
+      "css": ".ds-quota{width:220px;padding:14px;border:1px solid #223042;border-radius:14px;background:#0e151f;color:#eaf0f7;font-family:Manrope,system-ui,sans-serif}.ds-quota div{display:flex;align-items:center;gap:7px;color:#a6b2c2;font-size:10px}.ds-quota i{width:7px;height:7px;border-radius:50%;background:#69d6a5}.ds-quota strong{display:block;margin-top:10px;font:700 20px Consolas,monospace}.ds-quota p,.ds-quota small{color:#6f7d90;font-size:9px}.ds-quota b{height:3px;display:block;margin:9px 0;background:#0a1018;overflow:hidden}.ds-quota em{width:73%;height:100%;display:block;background:#64dff5}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Live Signal Bench",
+    "overview": "SuperMonitor is an operator's instrument panel rather than a generic SaaS card wall. Graphite surfaces, etched separators, compact measurements, and scarce semantic signal colors make freshness, quota pressure, and source confidence readable at a glance.",
+    "keyCharacteristics": ["Chart-first operational hierarchy.", "Graphite tonal layering with fine structural borders.", "Semantic cyan, amber, coral, and green signals.", "Monospaced numerals only for measurements.", "Fast state-driven motion with reduced-motion support."],
+    "rules": [
+      { "name": "The Signal Scarcity Rule", "body": "Cyan is reserved for live state, selection, and the primary action; it must not become general decoration.", "section": "colors" },
+      { "name": "The Measurement Voice Rule", "body": "Use monospace only where alignment or numeric scanning materially improves comprehension.", "section": "typography" },
+      { "name": "The Structural Depth Rule", "body": "Resting content panels use borders and tonal contrast; shadows are reserved for overlays and transient elevation.", "section": "elevation" }
+    ],
+    "dos": ["Do preserve provider-native units and show source and freshness beside the value.", "Do use semantic status color together with text, icons, or placement.", "Do keep routine transitions fast, interruptible, and transform-based.", "Do test the 224px rail, 76px rail, and mobile bottom-dock compositions."],
+    "donts": ["Don't replace the chart-first hierarchy with a generic grid of equal cards.", "Don't mix credits, currency, token plans, and time-window limits into one score.", "Don't use cyan as ambient decoration or coral without a recovery path.", "Don't add proxy-routing, account-rotation, or model-request controls to this product surface."]
+  }
+}

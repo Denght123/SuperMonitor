@@ -1,0 +1,16 @@
+services:
+  supermonitor:
+    build: .
+    image: ghcr.io/denght123/supermonitor:dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      SUPMON_LISTEN: 0.0.0.0:8080
+      SUPMON_DATA_DIR: /app/data
+      SUPMON_ENVIRONMENT: docker
+    volumes:
+      - supermonitor-data:/app/data
+
+volumes:
+  supermonitor-data:

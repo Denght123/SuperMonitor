@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+      - name: Verify generated API types
+        working-directory: web
+        run: npm run api:check
+      - name: Frontend checks
+        working-directory: web
+        run: npm run check
+      - name: Build frontend
+        working-directory: web
+        run: npm run build
+      - name: Go vet
+        run: go vet ./...
+      - name: Go tests
+        run: go test ./...
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
