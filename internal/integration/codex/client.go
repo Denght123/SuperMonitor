@@ -21,7 +21,7 @@ const (
 	deviceVerificationURL = "https://auth.openai.com/codex/device"
 	deviceRedirectURI     = "https://auth.openai.com/deviceauth/callback"
 	usageURL              = "https://chatgpt.com/backend-api/wham/usage"
-	userAgent             = "codex_cli_rs/0.154.0 (Windows; x86_64) SuperMonitor/0.2.0"
+	userAgent             = "codex_cli_rs/0.154.0 (Windows; x86_64) SuperMonitor/0.3.0"
 )
 
 type Client struct {

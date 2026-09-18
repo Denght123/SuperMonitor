@@ -56,6 +56,7 @@ type QuotaSignal struct {
 
 type AccountSummary struct {
 	ID              string        `json:"id"`
+	ProviderID      string        `json:"providerId"`
 	Provider        string        `json:"provider"`
 	Region          string        `json:"region"`
 	Alias           string        `json:"alias"`
@@ -102,6 +103,8 @@ type Provider struct {
 type ConnectedAccount struct {
 	ID              string
 	ProviderID      string
+	ProviderName    string
+	Region          string
 	Alias           string
 	Email           string
 	Plan            string

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/Denght123/SuperMonitor/internal/service"
@@ -62,6 +63,105 @@ func New(deps Dependencies) http.Handler {
 				return
 			}
 			writeJSON(w, http.StatusAccepted, map[string]any{"status": "completed", "message": "全部额度已刷新"})
+		})
+		api.Post("/providers/{providerID}/accounts/import", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Accounts == nil {
+				writeError(w, http.StatusServiceUnavailable, "accounts_unavailable", "账号服务未启用")
+				return
+			}
+			providerID := chi.URLParam(r, "providerID")
+			r.Body = http.MaxBytesReader(w, r.Body, 2*1024*1024)
+			if err := r.ParseMultipartForm(1024 * 1024); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_upload", "认证文件无效或超过 1 MB")
+				return
+			}
+			file, _, err := r.FormFile("file")
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "file_required", "请选择认证文件")
+				return
+			}
+			defer file.Close()
+			body, err := io.ReadAll(io.LimitReader(file, 1024*1024+1))
+			if err != nil || len(body) > 1024*1024 {
+				writeError(w, http.StatusBadRequest, "invalid_upload", "认证文件读取失败或超过 1 MB")
+				return
+			}
+			var account any
+			switch providerID {
+			case "codex":
+				account, err = deps.Accounts.ImportCodex(r.Context(), r.FormValue("alias"), body)
+			case "workbuddy-cn", "workbuddy-global":
+				account, err = deps.Accounts.ImportWorkBuddy(r.Context(), providerID, r.FormValue("alias"), body)
+			default:
+				writeError(w, http.StatusBadRequest, "import_unsupported", "该平台不支持认证文件导入")
+				return
+			}
+			if err != nil {
+				writeError(w, providerErrorStatus(err), "credential_import_failed", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusCreated, account)
+		})
+		api.Post("/providers/{providerID}/accounts/secret", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Accounts == nil {
+				writeError(w, http.StatusServiceUnavailable, "accounts_unavailable", "账号服务未启用")
+				return
+			}
+			var payload struct {
+				Alias  string `json:"alias"`
+				Secret string `json:"secret"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&payload); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_payload", "请求内容无效")
+				return
+			}
+			var account any
+			var err error
+			switch chi.URLParam(r, "providerID") {
+			case "deepseek":
+				account, err = deps.Accounts.ConnectDeepSeek(r.Context(), payload.Alias, payload.Secret)
+			case "mimo":
+				account, err = deps.Accounts.ConnectMimo(r.Context(), payload.Alias, payload.Secret)
+			default:
+				writeError(w, http.StatusBadRequest, "secret_unsupported", "该平台不支持密钥方式连接")
+				return
+			}
+			if err != nil {
+				writeError(w, providerErrorStatus(err), "secret_connection_failed", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusCreated, account)
+		})
+		api.Post("/providers/{providerID}/oauth", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Accounts == nil {
+				writeError(w, http.StatusServiceUnavailable, "accounts_unavailable", "账号服务未启用")
+				return
+			}
+			var payload struct {
+				Alias string `json:"alias"`
+			}
+			if r.Body != nil {
+				_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&payload)
+			}
+			providerID := chi.URLParam(r, "providerID")
+			if providerID != "workbuddy-cn" && providerID != "workbuddy-global" {
+				writeError(w, http.StatusBadRequest, "oauth_unsupported", "该平台暂不支持此 OAuth 流程")
+				return
+			}
+			session, err := deps.Accounts.StartWorkBuddyOAuth(r.Context(), providerID, payload.Alias)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, "oauth_start_failed", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusAccepted, session)
+		})
+		api.Get("/providers/{providerID}/oauth/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
+			session, ok := deps.Accounts.DeviceLoginStatus(chi.URLParam(r, "sessionID"))
+			if !ok || session.Provider != chi.URLParam(r, "providerID") {
+				writeError(w, http.StatusNotFound, "oauth_session_not_found", "登录会话不存在或已过期")
+				return
+			}
+			writeJSON(w, http.StatusOK, session)
 		})
 		api.Post("/providers/codex/accounts/import", func(w http.ResponseWriter, r *http.Request) {
 			if deps.Accounts == nil {
@@ -200,4 +300,14 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
+}
+
+func providerErrorStatus(err error) int {
+	message := err.Error()
+	for _, marker := range []string{"为空", "无效", "缺少", "不是有效", "已失效", "不支持", "不符"} {
+		if strings.Contains(message, marker) {
+			return http.StatusBadRequest
+		}
+	}
+	return http.StatusBadGateway
 }

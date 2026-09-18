@@ -2,7 +2,7 @@
 
 SuperMonitor is an open-source, self-hosted control plane for monitoring AI and coding-agent quotas, credits, balances, refresh windows, and usage history.
 
-> Current status: **v0.2 live Codex adapter**. Codex supports encrypted OAuth credential import, official device-code login, token refresh, and live quota windows. Other provider cards are present but remain disabled until their authentication and quota protocols are verified.
+> Current status: **v0.3 real provider connections**. Codex, WorkBuddy / CodeBuddy CN and Global, DeepSeek, and Xiaomi MiMo support real local authentication and live quota retrieval. Other provider cards remain disabled until their protocols are verified.
 
 ## Principles
 
@@ -11,13 +11,13 @@ SuperMonitor is an open-source, self-hosted control plane for monitoring AI and 
 - Every metric exposes freshness, source, and confidence.
 - Secrets stay encrypted and excluded from source control.
 
-## Live Codex monitoring
+## Live monitoring adapters
 
-- Import a Codex `auth.json` or compatible CLIProxyAPI credential JSON.
-- Sign in through OpenAI's official device-code page from a desktop or phone.
-- Read native quota windows from `https://chatgpt.com/backend-api/wham/usage`.
-- Label 5-hour, weekly, and monthly windows from the duration returned by OpenAI.
-- Store credentials with AES-GCM using a random key created in `SUPMON_DATA_DIR`.
+- Codex: import `auth.json` or use OpenAI's official device-code flow, then read native quota windows.
+- WorkBuddy / CodeBuddy CN and Global: import a credential file or use official QR OAuth, then read billing credits and expiry.
+- DeepSeek: enter an API key to read the official account balance.
+- Xiaomi MiMo: paste the authenticated console Cookie to read Token Plan usage and reset time.
+- Store every credential with AES-GCM using a random key created in `SUPMON_DATA_DIR`.
 
 Uploaded files are parsed in memory and are not retained as files. Tokens are never returned to the browser.
 

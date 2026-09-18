@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: SuperMonitor API
-  version: 0.2.0
+  version: 0.3.0
   description: Monitoring-only API. It intentionally exposes no model proxy endpoints.
 servers:
   - url: /api/v1
@@ -36,7 +36,94 @@ paths:
       operationId: refreshAll
       responses:
         "202":
-          description: Refresh completed for connected accounts and demo adapters
+          description: Refresh completed for connected real accounts
+  /providers/{providerID}/accounts/import:
+    post:
+      operationId: importProviderCredential
+      parameters:
+        - in: path
+          name: providerID
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                alias: { type: string }
+                file: { type: string, format: binary }
+      responses:
+        "201":
+          description: Credential imported and live quota fetched
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountSummary" }
+  /providers/{providerID}/accounts/secret:
+    post:
+      operationId: connectProviderSecret
+      parameters:
+        - in: path
+          name: providerID
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [secret]
+              properties:
+                alias: { type: string }
+                secret: { type: string }
+      responses:
+        "201":
+          description: Secret verified and live quota fetched
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountSummary" }
+  /providers/{providerID}/oauth:
+    post:
+      operationId: startProviderOAuth
+      parameters:
+        - in: path
+          name: providerID
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                alias: { type: string }
+      responses:
+        "202":
+          description: Official provider OAuth login started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceLoginSession" }
+  /providers/{providerID}/oauth/{sessionID}:
+    get:
+      operationId: getProviderOAuth
+      parameters:
+        - in: path
+          name: providerID
+          required: true
+          schema: { type: string }
+        - in: path
+          name: sessionID
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OAuth login status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceLoginSession" }
   /providers/codex/accounts/import:
     post:
       operationId: importCodexAccount
@@ -179,9 +266,10 @@ components:
         confidence: { type: string }
     AccountSummary:
       type: object
-      required: [id, provider, region, alias, services, primaryMetric, secondaryMetric, status, source, lastRefreshedAt, nextRefreshAt, synthetic, quotaWindows]
+      required: [id, providerId, provider, region, alias, services, primaryMetric, secondaryMetric, status, source, lastRefreshedAt, nextRefreshAt, synthetic, quotaWindows]
       properties:
         id: { type: string }
+        providerId: { type: string }
         provider: { type: string }
         region: { type: string }
         alias: { type: string }
@@ -235,7 +323,7 @@ components:
         liveAuth: { type: boolean }
     DeviceLoginSession:
       type: object
-      required: [id, provider, status, userCode, verifyUrl, expiresAt, message]
+      required: [id, provider, status, verifyUrl, expiresAt, message]
       properties:
         id: { type: string }
         provider: { type: string }

@@ -2,6 +2,22 @@
 
 All notable changes to SuperMonitor are documented here.
 
+## [0.3.0] - 2026-09-18
+
+### Added
+
+- Real WorkBuddy / CodeBuddy CN and Global credential import, official QR OAuth, refresh-token renewal, and billing credit retrieval.
+- Real DeepSeek API-key balance retrieval through the official `/user/balance` endpoint.
+- Real Xiaomi MiMo Token Plan retrieval from a locally encrypted console Cookie.
+- Verified provider logos for every catalog platform through the Lobe Icons brand set.
+- Provider-specific connection forms for OAuth files, QR login, API keys, and Cookies.
+
+### Changed
+
+- Removed legacy production demo records and replaced chart/account placeholders with honest empty states.
+- Reduced dashboard typography and card density to a compact CLIProxyAPI-style monitoring layout.
+- Generalized account summaries, quota windows, and refresh handling across live providers.
+
 ## [0.2.0] - 2026-09-18
 
 ### Added

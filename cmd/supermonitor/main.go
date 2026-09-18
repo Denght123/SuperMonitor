@@ -47,8 +47,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := store.SeedSyntheticData(context.Background()); err != nil {
-		logger.Error("seed synthetic data", "error", err)
+	if err := store.EnsureProviderCatalog(context.Background()); err != nil {
+		logger.Error("ensure provider catalog", "error", err)
+		os.Exit(1)
+	}
+	if err := store.CleanupSyntheticData(context.Background()); err != nil {
+		logger.Error("remove legacy synthetic data", "error", err)
 		os.Exit(1)
 	}
 

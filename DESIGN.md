@@ -17,13 +17,13 @@ colors:
 typography:
   display:
     fontFamily: "Manrope Variable, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "30–42px"
+    fontSize: "28–34px"
     fontWeight: 700
     lineHeight: 1.15
     letterSpacing: "-0.028em"
   body:
     fontFamily: "Manrope Variable, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "16px"
+    fontSize: "14px"
     fontWeight: 400
     lineHeight: 1.5
   data:
@@ -116,11 +116,11 @@ The palette behaves like a dim technical workspace: neutral graphite carries the
 
 ### Hierarchy
 
-- **Display** (700, 24px, 1.15): Page titles and the strongest current-context label.
-- **Headline** (700, 13px, compact): Panel and section headings.
-- **Title** (700, 10–11px): Account names, setting titles, and alert titles.
-- **Body** (400, 15–16px, 1.5–1.55): Operational descriptions and supporting state.
-- **Label** (500–700, 12–14px): Sources, legends, statuses, and compact metadata.
+- **Display** (700, 28–34px, 1.15): Page titles and the strongest current-context label.
+- **Headline** (700, 18px, compact): Panel and section headings.
+- **Title** (700, 15–16px): Account names, setting titles, and alert titles.
+- **Body** (400, 14px, 1.5): Operational descriptions and supporting state.
+- **Label** (500–700, 11–13px): Sources, legends, statuses, and compact metadata.
 - **Data** (700, 18–23px, tabular numerals): Quotas, balances, KPIs, and the data clock.
 
 **The Measurement Voice Rule.** Use monospace only where alignment or numeric scanning materially improves comprehension.

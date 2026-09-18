@@ -52,6 +52,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/providers/{providerID}/accounts/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["importProviderCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{providerID}/accounts/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["connectProviderSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{providerID}/oauth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["startProviderOAuth"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{providerID}/oauth/{sessionID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProviderOAuth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/providers/codex/accounts/import": {
         parameters: {
             query?: never;
@@ -197,6 +261,7 @@ export interface components {
         };
         AccountSummary: {
             id: string;
+            providerId: string;
             provider: string;
             region: string;
             alias: string;
@@ -246,7 +311,7 @@ export interface components {
             provider: string;
             /** @enum {string} */
             status: "pending" | "completed" | "failed";
-            userCode: string;
+            userCode?: string;
             /** Format: uri */
             verifyUrl: string;
             /** Format: date-time */
@@ -314,12 +379,122 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Refresh completed for connected accounts and demo adapters */
+            /** @description Refresh completed for connected real accounts */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    importProviderCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                providerID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    alias?: string;
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Credential imported and live quota fetched */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSummary"];
+                };
+            };
+        };
+    };
+    connectProviderSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                providerID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    alias?: string;
+                    secret: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Secret verified and live quota fetched */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSummary"];
+                };
+            };
+        };
+    };
+    startProviderOAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                providerID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    alias?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Official provider OAuth login started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceLoginSession"];
+                };
+            };
+        };
+    };
+    getProviderOAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                providerID: string;
+                sessionID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OAuth login status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceLoginSession"];
+                };
             };
         };
     };

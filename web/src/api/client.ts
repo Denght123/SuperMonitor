@@ -49,17 +49,28 @@ export const api = {
   overview: () => request<Overview>('/overview'),
   providers: () => request<{ items: Provider[] }>('/providers'),
   refresh: () => request<{ status: string; message: string }>('/refresh', { method: 'POST' }),
-  importCodex: (file: File, alias: string) => {
+  importCredential: (providerId: string, file: File, alias: string) => {
     const body = new FormData()
     body.append('file', file)
     if (alias.trim()) body.append('alias', alias.trim())
-    return request<AccountSummary>('/providers/codex/accounts/import', { method: 'POST', body })
+    return request<AccountSummary>(`/providers/${encodeURIComponent(providerId)}/accounts/import`, { method: 'POST', body })
   },
+  connectSecret: (providerId: string, alias: string, secret: string) => request<AccountSummary>(`/providers/${encodeURIComponent(providerId)}/accounts/secret`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ alias: alias.trim(), secret }),
+  }),
   startCodexDeviceLogin: (alias: string) => request<DeviceLoginSession>('/providers/codex/device-login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ alias: alias.trim() }),
   }),
   codexDeviceLoginStatus: (id: string) => request<DeviceLoginSession>(`/providers/codex/device-login/${encodeURIComponent(id)}`),
+  startProviderOAuth: (providerId: string, alias: string) => request<DeviceLoginSession>(`/providers/${encodeURIComponent(providerId)}/oauth`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ alias: alias.trim() }),
+  }),
+  providerOAuthStatus: (providerId: string, id: string) => request<DeviceLoginSession>(`/providers/${encodeURIComponent(providerId)}/oauth/${encodeURIComponent(id)}`),
   refreshAccount: (id: string) => request<AccountSummary>(`/accounts/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
 }

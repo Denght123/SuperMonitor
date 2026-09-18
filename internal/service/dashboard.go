@@ -41,18 +41,24 @@ func (s *Dashboard) Overview(ctx context.Context) (domain.Overview, error) {
 	if err != nil {
 		return domain.Overview{}, err
 	}
+	if usage == nil {
+		usage = []domain.DailyUsage{}
+	}
+	if models == nil {
+		models = []domain.ModelUsage{}
+	}
+	if signals == nil {
+		signals = []domain.QuotaSignal{}
+	}
+	if accounts == nil {
+		accounts = []domain.AccountSummary{}
+	}
+	if alerts == nil {
+		alerts = []domain.Alert{}
+	}
 	tokens, requests := sqlite.Totals(usage)
-	syntheticSignals := append([]domain.QuotaSignal(nil), signals...)
 	for index := range accounts {
-		if !accounts[index].Synthetic {
-			signals = append(signals, accounts[index].QuotaWindows...)
-			continue
-		}
-		for _, signal := range syntheticSignals {
-			if signal.Provider == accounts[index].Provider {
-				accounts[index].QuotaWindows = append(accounts[index].QuotaWindows, signal)
-			}
-		}
+		signals = append(signals, accounts[index].QuotaWindows...)
 	}
 	sqlite.SortQuotaSignals(signals)
 	return domain.Overview{
@@ -60,8 +66,8 @@ func (s *Dashboard) Overview(ctx context.Context) (domain.Overview, error) {
 		Environment: s.environment,
 		Connection:  "live",
 		KPIs: []domain.KPI{
-			{ID: "tokens", Label: "真实 Token", Value: float64(tokens), Unit: "tokens", Delta: 12.8, Tone: "cyan"},
-			{ID: "requests", Label: "请求数", Value: float64(requests), Unit: "requests", Delta: 8.4, Tone: "blue"},
+			{ID: "tokens", Label: "真实 Token", Value: float64(tokens), Unit: "tokens", Delta: 0, Tone: "cyan"},
+			{ID: "requests", Label: "请求数", Value: float64(requests), Unit: "requests", Delta: 0, Tone: "blue"},
 			{ID: "accounts", Label: "活跃账号", Value: float64(sqlite.ActiveAccounts(accounts)), Unit: "accounts", Delta: 0, Tone: "neutral"},
 			{ID: "alerts", Label: "严重告警", Value: float64(sqlite.CriticalCount(alerts)), Unit: "alerts", Delta: 0, Tone: "critical"},
 		},

@@ -1,7 +1,7 @@
 {
   "name": "supermonitor-web",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,10 +15,12 @@
   },
   "dependencies": {
     "@fontsource-variable/manrope": "^5.2.8",
+    "@lobehub/icons": "^5.18.0",
     "lucide-react": "^0.468.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-is": "^19.3.0",
     "recharts": "^3.10.1"
   },
   "devDependencies": {

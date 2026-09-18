@@ -60,7 +60,7 @@ func (s *Store) migrate(ctx context.Context) error {
 }
 
 func (s *Store) SeedSyntheticData(ctx context.Context) error {
-	if err := s.ensureProviderCatalog(ctx); err != nil {
+	if err := s.EnsureProviderCatalog(ctx); err != nil {
 		return err
 	}
 	var count int
@@ -154,6 +154,37 @@ func (s *Store) SeedSyntheticData(ctx context.Context) error {
 		return err
 	}
 
+	return tx.Commit()
+}
+
+// CleanupSyntheticData removes only the fixed v0.1 demo rows. It deliberately
+// uses the known demo IDs so real usage history is never erased on startup.
+func (s *Store) CleanupSyntheticData(ctx context.Context) error {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE id IN
+		('acc-codex-main','acc-workbuddy-a','acc-deepseek-main','acc-bailian-plan','acc-gemini-lab')`).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	statements := []string{
+		`DELETE FROM accounts WHERE id IN ('acc-codex-main','acc-workbuddy-a','acc-deepseek-main','acc-bailian-plan','acc-gemini-lab')`,
+		`DELETE FROM quota_signals WHERE id IN ('codex-5h','codex-week','workbuddy-credit','deepseek-balance','bailian-plan','gemini-daily')`,
+		`DELETE FROM alerts WHERE id = 'alert-bailian-timeout'`,
+		`DELETE FROM model_usage WHERE model IN ('GPT-5','Claude Sonnet','Gemini Pro','DeepSeek V3','GLM')`,
+		`DELETE FROM usage_daily`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -254,16 +285,25 @@ func (s *Store) Accounts(ctx context.Context) ([]domain.AccountSummary, error) {
 	for _, account := range connected {
 		primary, secondary := "等待额度数据", ""
 		if len(account.QuotaWindows) > 0 {
-			window := account.QuotaWindows[0]
-			primary = fmt.Sprintf("%s %.0f%%", window.Label, valueOrZero(window.RemainingPercent))
+			primary = quotaSummary(account.QuotaWindows[0])
 			if len(account.QuotaWindows) > 1 {
-				second := account.QuotaWindows[1]
-				secondary = fmt.Sprintf("%s %.0f%%", second.Label, valueOrZero(second.RemainingPercent))
+				secondary = quotaSummary(account.QuotaWindows[1])
 			}
 		}
+		services := []string{account.ProviderName}
+		switch account.ProviderID {
+		case "codex":
+			services = []string{"Codex CLI"}
+		case "deepseek":
+			services = []string{"DeepSeek API"}
+		case "mimo":
+			services = []string{"MiMo Token Plan"}
+		case "workbuddy-cn", "workbuddy-global":
+			services = []string{"WorkBuddy", "CodeBuddy"}
+		}
 		result = append([]domain.AccountSummary{{
-			ID: account.ID, Provider: "Codex", Region: "Global", Alias: account.Alias,
-			Services: []string{"Codex CLI"}, PrimaryMetric: primary, SecondaryMetric: secondary,
+			ID: account.ID, ProviderID: account.ProviderID, Provider: account.ProviderName, Region: account.Region, Alias: account.Alias,
+			Services: services, PrimaryMetric: primary, SecondaryMetric: secondary,
 			Status: account.Status, Source: account.Source, LastRefreshedAt: account.LastRefreshedAt,
 			NextRefreshAt: account.NextRefreshAt, Error: account.Error, Email: account.Email,
 			Plan: account.Plan, AuthMethod: account.AuthMethod, Synthetic: false,
@@ -362,8 +402,9 @@ func (s *Store) SaveConnectedAccount(ctx context.Context, account domain.Connect
 }
 
 func (s *Store) ConnectedAccounts(ctx context.Context) ([]domain.ConnectedAccount, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, provider_id, alias, email, plan, auth_method, status,
-		source, last_refreshed_at, next_refresh_at, error FROM connected_accounts ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.provider_id, p.name, p.region, c.alias, c.email, c.plan, c.auth_method, c.status,
+		c.source, c.last_refreshed_at, c.next_refresh_at, c.error FROM connected_accounts c
+		JOIN providers p ON p.id=c.provider_id ORDER BY c.created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +413,7 @@ func (s *Store) ConnectedAccounts(ctx context.Context) ([]domain.ConnectedAccoun
 	for rows.Next() {
 		var account domain.ConnectedAccount
 		var last, next sql.NullString
-		if err := rows.Scan(&account.ID, &account.ProviderID, &account.Alias, &account.Email, &account.Plan,
+		if err := rows.Scan(&account.ID, &account.ProviderID, &account.ProviderName, &account.Region, &account.Alias, &account.Email, &account.Plan,
 			&account.AuthMethod, &account.Status, &account.Source, &last, &next, &account.Error); err != nil {
 			return nil, err
 		}
@@ -391,7 +432,7 @@ func (s *Store) ConnectedAccounts(ctx context.Context) ([]domain.ConnectedAccoun
 		return nil, err
 	}
 	for index := range result {
-		windows, err := s.connectedQuotaWindows(ctx, result[index].ID)
+		windows, err := s.connectedQuotaWindows(ctx, result[index].ID, result[index].ProviderName)
 		if err != nil {
 			return nil, err
 		}
@@ -404,10 +445,11 @@ func (s *Store) ConnectedAccount(ctx context.Context, id string) (domain.Connect
 	var account domain.ConnectedAccount
 	var last, next sql.NullString
 	var encrypted []byte
-	err := s.db.QueryRowContext(ctx, `SELECT c.id, c.provider_id, c.alias, c.email, c.plan, c.auth_method,
+	err := s.db.QueryRowContext(ctx, `SELECT c.id, c.provider_id, p.name, p.region, c.alias, c.email, c.plan, c.auth_method,
 		c.status, c.source, c.last_refreshed_at, c.next_refresh_at, c.error, k.encrypted_payload
-		FROM connected_accounts c JOIN account_credentials k ON k.account_id=c.id WHERE c.id=?`, id).Scan(
-		&account.ID, &account.ProviderID, &account.Alias, &account.Email, &account.Plan, &account.AuthMethod,
+		FROM connected_accounts c JOIN account_credentials k ON k.account_id=c.id
+		JOIN providers p ON p.id=c.provider_id WHERE c.id=?`, id).Scan(
+		&account.ID, &account.ProviderID, &account.ProviderName, &account.Region, &account.Alias, &account.Email, &account.Plan, &account.AuthMethod,
 		&account.Status, &account.Source, &last, &next, &account.Error, &encrypted)
 	if err != nil {
 		return domain.ConnectedAccount{}, nil, err
@@ -418,11 +460,11 @@ func (s *Store) ConnectedAccount(ctx context.Context, id string) (domain.Connect
 	if next.Valid {
 		account.NextRefreshAt, _ = time.Parse(time.RFC3339, next.String)
 	}
-	account.QuotaWindows, err = s.connectedQuotaWindows(ctx, id)
+	account.QuotaWindows, err = s.connectedQuotaWindows(ctx, id, account.ProviderName)
 	return account, encrypted, err
 }
 
-func (s *Store) connectedQuotaWindows(ctx context.Context, accountID string) ([]domain.QuotaSignal, error) {
+func (s *Store) connectedQuotaWindows(ctx context.Context, accountID, providerName string) ([]domain.QuotaSignal, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, label, kind, value, total, unit, remaining_percent,
 		window_seconds, reset_at, expires_at, status, source FROM account_quota_windows WHERE account_id=? ORDER BY rowid`, accountID)
 	if err != nil {
@@ -439,7 +481,7 @@ func (s *Store) connectedQuotaWindows(ctx context.Context, accountID string) ([]
 			&windowSeconds, &reset, &expiry, &item.Status, &item.Source); err != nil {
 			return nil, err
 		}
-		item.Provider = "Codex"
+		item.Provider = providerName
 		if total.Valid {
 			item.Total = &total.Float64
 		}
@@ -473,7 +515,7 @@ func (s *Store) ConnectedAccountIDs(ctx context.Context) ([]string, error) {
 	return ids, rows.Err()
 }
 
-func (s *Store) ensureProviderCatalog(ctx context.Context) error {
+func (s *Store) EnsureProviderCatalog(ctx context.Context) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	providers := []struct {
 		id, name, region, tier, status string
@@ -481,17 +523,17 @@ func (s *Store) ensureProviderCatalog(ctx context.Context) error {
 	}{
 		{"trae-cn", "TRAE CN / TraeCode / TraeWork", "CN", "community", "pending", []string{"oauth", "credential_import"}, []string{"quota", "usage"}},
 		{"qoder-cn", "Qoder CN", "CN", "community", "pending", []string{"oauth"}, []string{"quota"}},
-		{"workbuddy-cn", "WorkBuddy / CodeBuddy 国内版", "CN", "community", "pending", []string{"oauth", "credential_import"}, []string{"credits", "usage", "checkin"}},
+		{"workbuddy-cn", "WorkBuddy / CodeBuddy 国内版", "CN", "community", "healthy", []string{"oauth", "credential_import"}, []string{"credits", "checkin"}},
 		{"coze-cn", "扣子 Coze", "CN", "official", "pending", []string{"oauth"}, []string{"credits", "usage"}},
 		{"bailian", "阿里云百炼 Token Plan", "CN", "official", "pending", []string{"oauth", "api_key"}, []string{"token_plan", "usage"}},
-		{"mimo", "基元混动", "CN", "community", "pending", []string{"credential_import"}, []string{"balance", "token_plan"}},
-		{"deepseek", "DeepSeek", "CN", "official", "pending", []string{"api_key"}, []string{"balance", "usage"}},
+		{"mimo", "小米 MiMo（基元混动）", "CN", "community", "healthy", []string{"cookie"}, []string{"token_plan"}},
+		{"deepseek", "DeepSeek", "CN", "official", "healthy", []string{"api_key"}, []string{"balance"}},
 		{"zhipu", "智谱 AI", "CN", "official", "pending", []string{"api_key", "oauth"}, []string{"balance", "usage"}},
 		{"codex", "Codex", "Global", "community", "healthy", []string{"device_code", "credential_import"}, []string{"quota", "credits"}},
 		{"gemini-cli", "Gemini", "Global", "official", "pending", []string{"oauth"}, []string{"quota", "usage"}},
 		{"claude-code", "Claude Code", "Global", "community", "pending", []string{"oauth", "credential_import"}, []string{"quota", "usage"}},
 		{"qoder-global", "Qoder 国际版", "Global", "community", "pending", []string{"oauth"}, []string{"quota"}},
-		{"workbuddy-global", "WorkBuddy / CodeBuddy 国际版", "Global", "community", "pending", []string{"oauth", "credential_import"}, []string{"credits", "usage", "checkin"}},
+		{"workbuddy-global", "WorkBuddy / CodeBuddy 国际版", "Global", "community", "healthy", []string{"oauth", "credential_import"}, []string{"credits"}},
 		{"kiro", "Kiro", "Global", "community", "pending", []string{"oauth"}, []string{"quota"}},
 		{"cursor", "Cursor", "Global", "community", "pending", []string{"oauth", "credential_import"}, []string{"quota", "usage"}},
 	}
@@ -515,7 +557,7 @@ func providerPresentation(id string) (string, string, bool) {
 		"workbuddy-cn": "积分包、到期时间与签到活动。",
 		"bailian":      "Token Plan 额度、周期和模型用量。",
 		"deepseek":     "账户余额与 API Token 用量。",
-		"mimo":         "Token Plan 与控制台余额。",
+		"mimo":         "粘贴小米 MiMo 控制台 Cookie，读取 Token Plan 月度额度与周期。",
 		"claude-code":  "Claude Code 订阅额度窗口。",
 		"cursor":       "订阅请求额度和模型用量。",
 	}
@@ -527,7 +569,8 @@ func providerPresentation(id string) (string, string, bool) {
 	if strings.HasSuffix(id, "-cn") || id == "coze-cn" || id == "bailian" || id == "mimo" || id == "deepseek" || id == "zhipu" {
 		category = "国内平台"
 	}
-	return description, category, id == "codex"
+	live := map[string]bool{"codex": true, "workbuddy-cn": true, "workbuddy-global": true, "deepseek": true, "mimo": true}
+	return description, category, live[id]
 }
 
 func valueOrZero(value *float64) float64 {
@@ -535,6 +578,13 @@ func valueOrZero(value *float64) float64 {
 		return 0
 	}
 	return *value
+}
+
+func quotaSummary(signal domain.QuotaSignal) string {
+	if signal.RemainingPercent != nil {
+		return fmt.Sprintf("%s %.0f%%", signal.Label, *signal.RemainingPercent)
+	}
+	return fmt.Sprintf("%s %.2f %s", signal.Label, signal.Value, signal.Unit)
 }
 func formatOptionalTime(value time.Time) any {
 	if value.IsZero() {
