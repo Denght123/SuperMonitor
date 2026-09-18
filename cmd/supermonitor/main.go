@@ -14,6 +14,7 @@ import (
 
 	"github.com/Denght123/SuperMonitor/internal/api"
 	"github.com/Denght123/SuperMonitor/internal/config"
+	"github.com/Denght123/SuperMonitor/internal/secure"
 	"github.com/Denght123/SuperMonitor/internal/service"
 	"github.com/Denght123/SuperMonitor/internal/store/sqlite"
 	"github.com/Denght123/SuperMonitor/internal/webui"
@@ -40,6 +41,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	vault, err := secure.OpenVault(filepath.Join(cfg.DataDir, "credential.key"))
+	if err != nil {
+		logger.Error("open credential vault", "error", err)
+		os.Exit(1)
+	}
 
 	if err := store.SeedSyntheticData(context.Background()); err != nil {
 		logger.Error("seed synthetic data", "error", err)
@@ -47,9 +53,11 @@ func main() {
 	}
 
 	hub := service.NewEventHub()
-	dashboard := service.NewDashboard(store, hub, cfg.Environment)
+	accounts := service.NewAccounts(store, vault, hub)
+	dashboard := service.NewDashboard(store, hub, accounts, cfg.Environment)
 	handler := api.New(api.Dependencies{
 		Dashboard: dashboard,
+		Accounts:  accounts,
 		Events:    hub,
 		Web:       webui.Handler(),
 		Logger:    logger,

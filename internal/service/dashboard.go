@@ -12,11 +12,12 @@ import (
 type Dashboard struct {
 	store       *sqlite.Store
 	events      *EventHub
+	accounts    *Accounts
 	environment string
 }
 
-func NewDashboard(store *sqlite.Store, events *EventHub, environment string) *Dashboard {
-	return &Dashboard{store: store, events: events, environment: environment}
+func NewDashboard(store *sqlite.Store, events *EventHub, accounts *Accounts, environment string) *Dashboard {
+	return &Dashboard{store: store, events: events, accounts: accounts, environment: environment}
 }
 
 func (s *Dashboard) Overview(ctx context.Context) (domain.Overview, error) {
@@ -41,6 +42,18 @@ func (s *Dashboard) Overview(ctx context.Context) (domain.Overview, error) {
 		return domain.Overview{}, err
 	}
 	tokens, requests := sqlite.Totals(usage)
+	syntheticSignals := append([]domain.QuotaSignal(nil), signals...)
+	for index := range accounts {
+		if !accounts[index].Synthetic {
+			signals = append(signals, accounts[index].QuotaWindows...)
+			continue
+		}
+		for _, signal := range syntheticSignals {
+			if signal.Provider == accounts[index].Provider {
+				accounts[index].QuotaWindows = append(accounts[index].QuotaWindows, signal)
+			}
+		}
+	}
 	sqlite.SortQuotaSignals(signals)
 	return domain.Overview{
 		GeneratedAt: time.Now().UTC(),
@@ -66,9 +79,14 @@ func (s *Dashboard) Providers(ctx context.Context) ([]domain.Provider, error) {
 
 func (s *Dashboard) Refresh(ctx context.Context) error {
 	now := time.Now().UTC().Truncate(time.Second)
+	if s.accounts != nil {
+		if err := s.accounts.RefreshAll(ctx); err != nil {
+			return err
+		}
+	}
 	if err := s.store.TouchRefresh(ctx, now); err != nil {
 		return fmt.Errorf("refresh accounts: %w", err)
 	}
-	s.events.Publish(Event{Type: "refresh.completed", Message: "所有模拟适配器已刷新", Timestamp: now})
+	s.events.Publish(Event{Type: "refresh.completed", Message: "全部账号额度已刷新", Timestamp: now})
 	return nil
 }

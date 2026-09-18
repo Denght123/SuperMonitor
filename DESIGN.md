@@ -1,30 +1,29 @@
 ---
 name: SuperMonitor
-description: A graphite mission-control cockpit for trustworthy AI quota signals.
+description: A light-first mission-control console for trustworthy AI quota signals, with a graphite dark mode.
 colors:
-  graphite-bg: "#090d14"
-  graphite-sidebar: "#0c111a"
-  instrument-surface: "#0e151f"
-  raised-surface: "#121b27"
-  etched-line: "#223042"
-  primary-text: "#eaf0f7"
-  secondary-text: "#a6b2c2"
-  muted-text: "#6f7d90"
-  live-cyan: "#64dff5"
-  signal-blue: "#8ea4ff"
-  warning-amber: "#f0b45f"
-  healthy-green: "#69d6a5"
-  fault-coral: "#f47d91"
+  canvas: "#f5f7fa"
+  instrument-surface: "#ffffff"
+  raised-surface: "#f0f3f7"
+  etched-line: "#dce2ea"
+  primary-text: "#18212f"
+  secondary-text: "#4b596c"
+  muted-text: "#6d7a8c"
+  live-teal: "#137a72"
+  signal-blue: "#3478d4"
+  warning-amber: "#c77a14"
+  healthy-green: "#15956f"
+  fault-coral: "#d6474d"
 typography:
   display:
     fontFamily: "Manrope Variable, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "24px"
+    fontSize: "30–42px"
     fontWeight: 700
     lineHeight: 1.15
     letterSpacing: "-0.028em"
   body:
     fontFamily: "Manrope Variable, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "12px"
+    fontSize: "16px"
     fontWeight: 400
     lineHeight: 1.5
   data:
@@ -65,17 +64,17 @@ components:
 
 ## Overview
 
-**Creative North Star: "The Live Signal Bench"**
+**Creative North Star: "The Readable Signal Bench"**
 
-SuperMonitor is an operator's instrument panel rather than a generic SaaS card wall. It uses graphite surfaces, etched separators, compact measurements, and a deliberately scarce cyan live signal to make freshness, quota pressure, and source confidence readable at a glance.
+SuperMonitor is an operator's instrument panel rather than a generic SaaS card wall. It defaults to a quiet light workspace for long monitoring sessions, with graphite dark mode available on demand. Fine separators, generous type, and deliberately scarce teal live signals make freshness, quota pressure, and source confidence readable at a glance.
 
 The interface is dense but calm. Charts establish the first visual priority, native provider units remain intact, and motion communicates continuity or state changes without delaying work. Decorative imagery is intentionally absent; the data and its provenance are the visual material.
 
 **Key Characteristics:**
 
 - Chart-first operational hierarchy.
-- Graphite tonal layering with fine structural borders.
-- Cyan for live actions, amber for caution, coral for faults, and green for healthy connections.
+- Light tonal layering with fine structural borders and an equivalent graphite dark mode.
+- Teal for live actions, amber for caution, coral for faults, and green for healthy connections.
 - Monospaced numerals only for measurements, clocks, and keyboard hints.
 - Fast, state-driven motion with a complete reduced-motion path.
 
@@ -120,8 +119,8 @@ The palette behaves like a dim technical workspace: neutral graphite carries the
 - **Display** (700, 24px, 1.15): Page titles and the strongest current-context label.
 - **Headline** (700, 13px, compact): Panel and section headings.
 - **Title** (700, 10–11px): Account names, setting titles, and alert titles.
-- **Body** (400, 10–12px, 1.45–1.5): Operational descriptions and supporting state.
-- **Label** (400–700, 8–10px, modest tracking): Sources, legends, statuses, and compact metadata.
+- **Body** (400, 15–16px, 1.5–1.55): Operational descriptions and supporting state.
+- **Label** (500–700, 12–14px): Sources, legends, statuses, and compact metadata.
 - **Data** (700, 18–23px, tabular numerals): Quotas, balances, KPIs, and the data clock.
 
 **The Measurement Voice Rule.** Use monospace only where alignment or numeric scanning materially improves comprehension.

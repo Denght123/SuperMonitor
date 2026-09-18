@@ -46,6 +46,7 @@ type QuotaSignal struct {
 	Total            *float64   `json:"total,omitempty"`
 	Unit             string     `json:"unit"`
 	RemainingPercent *float64   `json:"remainingPercent,omitempty"`
+	WindowSeconds    int64      `json:"windowSeconds,omitempty"`
 	ResetAt          *time.Time `json:"resetAt,omitempty"`
 	ExpiresAt        *time.Time `json:"expiresAt,omitempty"`
 	Status           string     `json:"status"`
@@ -54,18 +55,23 @@ type QuotaSignal struct {
 }
 
 type AccountSummary struct {
-	ID              string    `json:"id"`
-	Provider        string    `json:"provider"`
-	Region          string    `json:"region"`
-	Alias           string    `json:"alias"`
-	Services        []string  `json:"services"`
-	PrimaryMetric   string    `json:"primaryMetric"`
-	SecondaryMetric string    `json:"secondaryMetric"`
-	Status          string    `json:"status"`
-	Source          string    `json:"source"`
-	LastRefreshedAt time.Time `json:"lastRefreshedAt"`
-	NextRefreshAt   time.Time `json:"nextRefreshAt"`
-	Error           string    `json:"error,omitempty"`
+	ID              string        `json:"id"`
+	Provider        string        `json:"provider"`
+	Region          string        `json:"region"`
+	Alias           string        `json:"alias"`
+	Services        []string      `json:"services"`
+	PrimaryMetric   string        `json:"primaryMetric"`
+	SecondaryMetric string        `json:"secondaryMetric"`
+	Status          string        `json:"status"`
+	Source          string        `json:"source"`
+	LastRefreshedAt time.Time     `json:"lastRefreshedAt"`
+	NextRefreshAt   time.Time     `json:"nextRefreshAt"`
+	Error           string        `json:"error,omitempty"`
+	Email           string        `json:"email,omitempty"`
+	Plan            string        `json:"plan,omitempty"`
+	AuthMethod      string        `json:"authMethod,omitempty"`
+	Synthetic       bool          `json:"synthetic"`
+	QuotaWindows    []QuotaSignal `json:"quotaWindows"`
 }
 
 type Alert struct {
@@ -88,4 +94,22 @@ type Provider struct {
 	Capabilities  []string  `json:"capabilities"`
 	AccountCount  int       `json:"accountCount"`
 	LastCheckedAt time.Time `json:"lastCheckedAt"`
+	Description   string    `json:"description"`
+	Category      string    `json:"category"`
+	LiveAuth      bool      `json:"liveAuth"`
+}
+
+type ConnectedAccount struct {
+	ID              string
+	ProviderID      string
+	Alias           string
+	Email           string
+	Plan            string
+	AuthMethod      string
+	Status          string
+	Source          string
+	LastRefreshedAt time.Time
+	NextRefreshAt   time.Time
+	Error           string
+	QuotaWindows    []QuotaSignal
 }

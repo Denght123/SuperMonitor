@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Denght123/SuperMonitor/internal/domain"
@@ -59,8 +60,11 @@ func (s *Store) migrate(ctx context.Context) error {
 }
 
 func (s *Store) SeedSyntheticData(ctx context.Context) error {
+	if err := s.ensureProviderCatalog(ctx); err != nil {
+		return err
+	}
 	var count int
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM providers").Scan(&count); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM accounts").Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {
@@ -74,26 +78,6 @@ func (s *Store) SeedSyntheticData(ctx context.Context) error {
 	defer tx.Rollback()
 
 	now := time.Now().UTC().Truncate(time.Second)
-	providers := []struct {
-		id, name, region, tier, status string
-		auth, capabilities             []string
-	}{
-		{"codex", "Codex", "Global", "community", "healthy", []string{"oauth", "credential_import"}, []string{"quota", "usage"}},
-		{"workbuddy-cn", "WorkBuddy", "CN", "community", "healthy", []string{"device_code", "credential_import"}, []string{"credits", "usage", "checkin"}},
-		{"deepseek", "DeepSeek", "CN", "official", "healthy", []string{"api_key"}, []string{"balance"}},
-		{"bailian", "阿里云百炼", "CN", "official", "warning", []string{"api_key", "credential_import"}, []string{"token_plan", "usage"}},
-		{"gemini-cli", "Gemini CLI", "Global", "official", "healthy", []string{"oauth"}, []string{"quota"}},
-	}
-	for _, provider := range providers {
-		auth, _ := json.Marshal(provider.auth)
-		capabilities, _ := json.Marshal(provider.capabilities)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO providers
-			(id, name, region, tier, status, auth_methods, capabilities, last_checked_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, provider.id, provider.name, provider.region, provider.tier, provider.status, string(auth), string(capabilities), now.Format(time.RFC3339)); err != nil {
-			return err
-		}
-	}
-
 	accounts := []domain.AccountSummary{
 		{ID: "acc-codex-main", Provider: "Codex", Region: "Global", Alias: "主力开发", Services: []string{"Codex CLI"}, PrimaryMetric: "5h 剩余 73%", SecondaryMetric: "周限额剩余 61%", Status: "healthy", Source: "社区适配", LastRefreshedAt: now.Add(-2 * time.Minute), NextRefreshAt: now.Add(3 * time.Minute)},
 		{ID: "acc-workbuddy-a", Provider: "WorkBuddy", Region: "CN", Alias: "工作账号 A", Services: []string{"WorkBuddy", "CodeBuddy CN"}, PrimaryMetric: "386.4 credits", SecondaryMetric: "09/23 到期", Status: "warning", Source: "社区适配", LastRefreshedAt: now.Add(-4 * time.Minute), NextRefreshAt: now.Add(6 * time.Minute)},
@@ -253,9 +237,40 @@ func (s *Store) Accounts(ctx context.Context) ([]domain.AccountSummary, error) {
 		_ = json.Unmarshal([]byte(services), &item.Services)
 		item.LastRefreshedAt, _ = time.Parse(time.RFC3339, lastRefreshed)
 		item.NextRefreshAt, _ = time.Parse(time.RFC3339, nextRefresh)
+		item.Synthetic = true
+		item.QuotaWindows = []domain.QuotaSignal{}
 		result = append(result, item)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	connected, err := s.ConnectedAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, account := range connected {
+		primary, secondary := "等待额度数据", ""
+		if len(account.QuotaWindows) > 0 {
+			window := account.QuotaWindows[0]
+			primary = fmt.Sprintf("%s %.0f%%", window.Label, valueOrZero(window.RemainingPercent))
+			if len(account.QuotaWindows) > 1 {
+				second := account.QuotaWindows[1]
+				secondary = fmt.Sprintf("%s %.0f%%", second.Label, valueOrZero(second.RemainingPercent))
+			}
+		}
+		result = append([]domain.AccountSummary{{
+			ID: account.ID, Provider: "Codex", Region: "Global", Alias: account.Alias,
+			Services: []string{"Codex CLI"}, PrimaryMetric: primary, SecondaryMetric: secondary,
+			Status: account.Status, Source: account.Source, LastRefreshedAt: account.LastRefreshedAt,
+			NextRefreshAt: account.NextRefreshAt, Error: account.Error, Email: account.Email,
+			Plan: account.Plan, AuthMethod: account.AuthMethod, Synthetic: false,
+			QuotaWindows: account.QuotaWindows,
+		}}, result...)
+	}
+	return result, nil
 }
 
 func (s *Store) Alerts(ctx context.Context) ([]domain.Alert, error) {
@@ -279,8 +294,10 @@ func (s *Store) Alerts(ctx context.Context) ([]domain.Alert, error) {
 
 func (s *Store) Providers(ctx context.Context) ([]domain.Provider, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.name, p.region, p.tier, p.status, p.auth_methods,
-		p.capabilities, COUNT(a.id), p.last_checked_at
-		FROM providers p LEFT JOIN accounts a ON a.provider_id = p.id GROUP BY p.id ORDER BY p.rowid`)
+		p.capabilities,
+		(SELECT COUNT(*) FROM accounts a WHERE a.provider_id=p.id) +
+		(SELECT COUNT(*) FROM connected_accounts c WHERE c.provider_id=p.id),
+		p.last_checked_at FROM providers p ORDER BY p.rowid`)
 	if err != nil {
 		return nil, err
 	}
@@ -295,9 +312,241 @@ func (s *Store) Providers(ctx context.Context) ([]domain.Provider, error) {
 		_ = json.Unmarshal([]byte(auth), &item.AuthMethods)
 		_ = json.Unmarshal([]byte(capabilities), &item.Capabilities)
 		item.LastCheckedAt, _ = time.Parse(time.RFC3339, checkedAt)
+		item.Description, item.Category, item.LiveAuth = providerPresentation(item.ID)
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) SaveConnectedAccount(ctx context.Context, account domain.ConnectedAccount, encryptedCredential []byte) error {
+	now := time.Now().UTC().Truncate(time.Second)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO connected_accounts
+		(id, provider_id, alias, email, plan, auth_method, status, source, last_refreshed_at, next_refresh_at, error, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET alias=excluded.alias, email=excluded.email, plan=excluded.plan,
+		auth_method=excluded.auth_method, status=excluded.status, source=excluded.source,
+		last_refreshed_at=excluded.last_refreshed_at, next_refresh_at=excluded.next_refresh_at,
+		error=excluded.error, updated_at=excluded.updated_at`, account.ID, account.ProviderID, account.Alias,
+		account.Email, account.Plan, account.AuthMethod, account.Status, account.Source,
+		formatOptionalTime(account.LastRefreshedAt), formatOptionalTime(account.NextRefreshAt), account.Error,
+		now.Format(time.RFC3339), now.Format(time.RFC3339))
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO account_credentials(account_id, encrypted_payload, updated_at)
+		VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET encrypted_payload=excluded.encrypted_payload,
+		updated_at=excluded.updated_at`, account.ID, encryptedCredential, now.Format(time.RFC3339))
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM account_quota_windows WHERE account_id = ?", account.ID); err != nil {
+		return err
+	}
+	for index, window := range account.QuotaWindows {
+		_, err = tx.ExecContext(ctx, `INSERT INTO account_quota_windows
+			(id, account_id, label, kind, value, total, unit, remaining_percent, window_seconds, reset_at, expires_at, status, source, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, fmt.Sprintf("%s-%d", account.ID, index), account.ID,
+			window.Label, window.Kind, window.Value, window.Total, window.Unit, window.RemainingPercent,
+			window.WindowSeconds, formatTimePointer(window.ResetAt), formatTimePointer(window.ExpiresAt), window.Status,
+			window.Source, now.Format(time.RFC3339))
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ConnectedAccounts(ctx context.Context) ([]domain.ConnectedAccount, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, provider_id, alias, email, plan, auth_method, status,
+		source, last_refreshed_at, next_refresh_at, error FROM connected_accounts ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []domain.ConnectedAccount
+	for rows.Next() {
+		var account domain.ConnectedAccount
+		var last, next sql.NullString
+		if err := rows.Scan(&account.ID, &account.ProviderID, &account.Alias, &account.Email, &account.Plan,
+			&account.AuthMethod, &account.Status, &account.Source, &last, &next, &account.Error); err != nil {
+			return nil, err
+		}
+		if last.Valid {
+			account.LastRefreshedAt, _ = time.Parse(time.RFC3339, last.String)
+		}
+		if next.Valid {
+			account.NextRefreshAt, _ = time.Parse(time.RFC3339, next.String)
+		}
+		result = append(result, account)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for index := range result {
+		windows, err := s.connectedQuotaWindows(ctx, result[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		result[index].QuotaWindows = windows
+	}
+	return result, nil
+}
+
+func (s *Store) ConnectedAccount(ctx context.Context, id string) (domain.ConnectedAccount, []byte, error) {
+	var account domain.ConnectedAccount
+	var last, next sql.NullString
+	var encrypted []byte
+	err := s.db.QueryRowContext(ctx, `SELECT c.id, c.provider_id, c.alias, c.email, c.plan, c.auth_method,
+		c.status, c.source, c.last_refreshed_at, c.next_refresh_at, c.error, k.encrypted_payload
+		FROM connected_accounts c JOIN account_credentials k ON k.account_id=c.id WHERE c.id=?`, id).Scan(
+		&account.ID, &account.ProviderID, &account.Alias, &account.Email, &account.Plan, &account.AuthMethod,
+		&account.Status, &account.Source, &last, &next, &account.Error, &encrypted)
+	if err != nil {
+		return domain.ConnectedAccount{}, nil, err
+	}
+	if last.Valid {
+		account.LastRefreshedAt, _ = time.Parse(time.RFC3339, last.String)
+	}
+	if next.Valid {
+		account.NextRefreshAt, _ = time.Parse(time.RFC3339, next.String)
+	}
+	account.QuotaWindows, err = s.connectedQuotaWindows(ctx, id)
+	return account, encrypted, err
+}
+
+func (s *Store) connectedQuotaWindows(ctx context.Context, accountID string) ([]domain.QuotaSignal, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, label, kind, value, total, unit, remaining_percent,
+		window_seconds, reset_at, expires_at, status, source FROM account_quota_windows WHERE account_id=? ORDER BY rowid`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []domain.QuotaSignal
+	for rows.Next() {
+		var item domain.QuotaSignal
+		var total, percent sql.NullFloat64
+		var windowSeconds sql.NullInt64
+		var reset, expiry sql.NullString
+		if err := rows.Scan(&item.ID, &item.Label, &item.Kind, &item.Value, &total, &item.Unit, &percent,
+			&windowSeconds, &reset, &expiry, &item.Status, &item.Source); err != nil {
+			return nil, err
+		}
+		item.Provider = "Codex"
+		if total.Valid {
+			item.Total = &total.Float64
+		}
+		if percent.Valid {
+			item.RemainingPercent = &percent.Float64
+		}
+		if windowSeconds.Valid {
+			item.WindowSeconds = windowSeconds.Int64
+		}
+		item.ResetAt, item.ExpiresAt = parseOptionalTime(reset), parseOptionalTime(expiry)
+		item.Confidence = "live"
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) ConnectedAccountIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id FROM connected_accounts ORDER BY created_at")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (s *Store) ensureProviderCatalog(ctx context.Context) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	providers := []struct {
+		id, name, region, tier, status string
+		auth, capabilities             []string
+	}{
+		{"trae-cn", "TRAE CN / TraeCode / TraeWork", "CN", "community", "pending", []string{"oauth", "credential_import"}, []string{"quota", "usage"}},
+		{"qoder-cn", "Qoder CN", "CN", "community", "pending", []string{"oauth"}, []string{"quota"}},
+		{"workbuddy-cn", "WorkBuddy / CodeBuddy 国内版", "CN", "community", "pending", []string{"oauth", "credential_import"}, []string{"credits", "usage", "checkin"}},
+		{"coze-cn", "扣子 Coze", "CN", "official", "pending", []string{"oauth"}, []string{"credits", "usage"}},
+		{"bailian", "阿里云百炼 Token Plan", "CN", "official", "pending", []string{"oauth", "api_key"}, []string{"token_plan", "usage"}},
+		{"mimo", "基元混动", "CN", "community", "pending", []string{"credential_import"}, []string{"balance", "token_plan"}},
+		{"deepseek", "DeepSeek", "CN", "official", "pending", []string{"api_key"}, []string{"balance", "usage"}},
+		{"zhipu", "智谱 AI", "CN", "official", "pending", []string{"api_key", "oauth"}, []string{"balance", "usage"}},
+		{"codex", "Codex", "Global", "community", "healthy", []string{"device_code", "credential_import"}, []string{"quota", "credits"}},
+		{"gemini-cli", "Gemini", "Global", "official", "pending", []string{"oauth"}, []string{"quota", "usage"}},
+		{"claude-code", "Claude Code", "Global", "community", "pending", []string{"oauth", "credential_import"}, []string{"quota", "usage"}},
+		{"qoder-global", "Qoder 国际版", "Global", "community", "pending", []string{"oauth"}, []string{"quota"}},
+		{"workbuddy-global", "WorkBuddy / CodeBuddy 国际版", "Global", "community", "pending", []string{"oauth", "credential_import"}, []string{"credits", "usage", "checkin"}},
+		{"kiro", "Kiro", "Global", "community", "pending", []string{"oauth"}, []string{"quota"}},
+		{"cursor", "Cursor", "Global", "community", "pending", []string{"oauth", "credential_import"}, []string{"quota", "usage"}},
+	}
+	for _, provider := range providers {
+		auth, _ := json.Marshal(provider.auth)
+		caps, _ := json.Marshal(provider.capabilities)
+		_, err := s.db.ExecContext(ctx, `INSERT INTO providers(id,name,region,tier,status,auth_methods,capabilities,last_checked_at)
+			VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,region=excluded.region,
+			tier=excluded.tier,status=excluded.status,auth_methods=excluded.auth_methods,capabilities=excluded.capabilities`,
+			provider.id, provider.name, provider.region, provider.tier, provider.status, string(auth), string(caps), now)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func providerPresentation(id string) (string, string, bool) {
+	descriptions := map[string]string{
+		"codex":        "导入 Codex auth.json，或使用 OpenAI 官方设备验证码登录。",
+		"workbuddy-cn": "积分包、到期时间与签到活动。",
+		"bailian":      "Token Plan 额度、周期和模型用量。",
+		"deepseek":     "账户余额与 API Token 用量。",
+		"mimo":         "Token Plan 与控制台余额。",
+		"claude-code":  "Claude Code 订阅额度窗口。",
+		"cursor":       "订阅请求额度和模型用量。",
+	}
+	description := descriptions[id]
+	if description == "" {
+		description = "独立账号池与平台原生额度监控。"
+	}
+	category := "国际平台"
+	if strings.HasSuffix(id, "-cn") || id == "coze-cn" || id == "bailian" || id == "mimo" || id == "deepseek" || id == "zhipu" {
+		category = "国内平台"
+	}
+	return description, category, id == "codex"
+}
+
+func valueOrZero(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+func formatOptionalTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+func formatTimePointer(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 func (s *Store) TouchRefresh(ctx context.Context, now time.Time) error {

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Denght123/SuperMonitor/internal/api"
+	"github.com/Denght123/SuperMonitor/internal/secure"
 	"github.com/Denght123/SuperMonitor/internal/service"
 	"github.com/Denght123/SuperMonitor/internal/store/sqlite"
 )
@@ -24,8 +25,10 @@ func TestOverviewEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	hub := service.NewEventHub()
+	accounts := service.NewAccounts(store, mustVault(t), hub)
 	handler := api.New(api.Dependencies{
-		Dashboard: service.NewDashboard(store, hub, "test"),
+		Dashboard: service.NewDashboard(store, hub, accounts, "test"),
+		Accounts:  accounts,
 		Events:    hub,
 		Web:       http.NotFoundHandler(),
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -41,4 +44,13 @@ func TestOverviewEndpoint(t *testing.T) {
 	if response.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatal("security headers were not applied")
 	}
+}
+
+func mustVault(t *testing.T) *secure.Vault {
+	t.Helper()
+	vault, err := secure.OpenVault(filepath.Join(t.TempDir(), "credential.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return vault
 }

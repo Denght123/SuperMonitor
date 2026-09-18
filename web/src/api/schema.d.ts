@@ -52,6 +52,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/providers/codex/accounts/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["importCodexAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/codex/device-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["startCodexDeviceLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/codex/device-login/{sessionID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getCodexDeviceLogin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/accounts/{accountID}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["refreshAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events": {
         parameters: {
             query?: never;
@@ -120,6 +184,8 @@ export interface components {
             total?: number;
             unit: string;
             remainingPercent?: number;
+            /** Format: int64 */
+            windowSeconds?: number;
             /** Format: date-time */
             resetAt?: string;
             /** Format: date-time */
@@ -144,6 +210,11 @@ export interface components {
             /** Format: date-time */
             nextRefreshAt: string;
             error?: string;
+            email?: string;
+            plan?: string;
+            authMethod?: string;
+            synthetic: boolean;
+            quotaWindows: components["schemas"]["QuotaSignal"][];
         };
         Alert: {
             id: string;
@@ -166,6 +237,22 @@ export interface components {
             accountCount: number;
             /** Format: date-time */
             lastCheckedAt: string;
+            description: string;
+            category: string;
+            liveAuth: boolean;
+        };
+        DeviceLoginSession: {
+            id: string;
+            provider: string;
+            /** @enum {string} */
+            status: "pending" | "completed" | "failed";
+            userCode: string;
+            /** Format: uri */
+            verifyUrl: string;
+            /** Format: date-time */
+            expiresAt: string;
+            accountId?: string;
+            message: string;
         };
     };
     responses: never;
@@ -227,12 +314,110 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Refresh completed for the v0.1 synthetic adapters */
+            /** @description Refresh completed for connected accounts and demo adapters */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    importCodexAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    alias?: string;
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Codex account imported and quota fetched */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSummary"];
+                };
+            };
+        };
+    };
+    startCodexDeviceLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    alias?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Official Codex device login started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceLoginSession"];
+                };
+            };
+        };
+    };
+    getCodexDeviceLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Device login status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceLoginSession"];
+                };
+            };
+        };
+    };
+    refreshAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Refreshed account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSummary"];
+                };
             };
         };
     };

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -19,6 +20,7 @@ type dashboardService interface {
 
 type Dependencies struct {
 	Dashboard *service.Dashboard
+	Accounts  *service.Accounts
 	Events    *service.EventHub
 	Web       http.Handler
 	Logger    *slog.Logger
@@ -59,7 +61,73 @@ func New(deps Dependencies) http.Handler {
 				writeError(w, http.StatusInternalServerError, "refresh_failed", "刷新任务执行失败")
 				return
 			}
-			writeJSON(w, http.StatusAccepted, map[string]any{"status": "completed", "message": "模拟额度已刷新"})
+			writeJSON(w, http.StatusAccepted, map[string]any{"status": "completed", "message": "全部额度已刷新"})
+		})
+		api.Post("/providers/codex/accounts/import", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Accounts == nil {
+				writeError(w, http.StatusServiceUnavailable, "accounts_unavailable", "账号服务未启用")
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, 2*1024*1024)
+			if err := r.ParseMultipartForm(1024 * 1024); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_upload", "OAuth 文件无效或超过 1 MB")
+				return
+			}
+			file, _, err := r.FormFile("file")
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "file_required", "请选择 OAuth JSON 文件")
+				return
+			}
+			defer file.Close()
+			body, err := io.ReadAll(io.LimitReader(file, 1024*1024+1))
+			if err != nil || len(body) > 1024*1024 {
+				writeError(w, http.StatusBadRequest, "invalid_upload", "OAuth 文件读取失败或超过 1 MB")
+				return
+			}
+			account, err := deps.Accounts.ImportCodex(r.Context(), r.FormValue("alias"), body)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, "codex_import_failed", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusCreated, account)
+		})
+		api.Post("/providers/codex/device-login", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Accounts == nil {
+				writeError(w, http.StatusServiceUnavailable, "accounts_unavailable", "账号服务未启用")
+				return
+			}
+			var payload struct {
+				Alias string `json:"alias"`
+			}
+			if r.Body != nil {
+				_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&payload)
+			}
+			session, err := deps.Accounts.StartCodexDeviceLogin(r.Context(), payload.Alias)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, "device_login_failed", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusAccepted, session)
+		})
+		api.Get("/providers/codex/device-login/{sessionID}", func(w http.ResponseWriter, r *http.Request) {
+			session, ok := deps.Accounts.DeviceLoginStatus(chi.URLParam(r, "sessionID"))
+			if !ok {
+				writeError(w, http.StatusNotFound, "device_session_not_found", "登录会话不存在或已过期")
+				return
+			}
+			writeJSON(w, http.StatusOK, session)
+		})
+		api.Post("/accounts/{accountID}/refresh", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Accounts == nil {
+				writeError(w, http.StatusServiceUnavailable, "accounts_unavailable", "账号服务未启用")
+				return
+			}
+			account, err := deps.Accounts.RefreshOne(r.Context(), chi.URLParam(r, "accountID"))
+			if err != nil {
+				writeError(w, http.StatusBadGateway, "account_refresh_failed", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, account)
 		})
 		api.Get("/events", func(w http.ResponseWriter, r *http.Request) {
 			flusher, ok := w.(http.Flusher)

@@ -9,6 +9,9 @@
 secrets/
 credentials/
 auth-exports/
+auth.json
+*.oauth.json
+oauth-*.json
 
 # Runtime data
 data/
@@ -34,6 +37,7 @@ internal/webui/assets/*
 !internal/webui/assets/placeholder.txt
 
 # Tooling
+.references/
 .impeccable/mocks/
 .impeccable/review/
 .impeccable/chrome-profile/
