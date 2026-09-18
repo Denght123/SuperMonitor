@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Denght123/SuperMonitor/internal/netutil"
 )
 
 type Variant string
@@ -37,9 +40,32 @@ type Credential struct {
 type Credits struct {
 	Total, Remaining float64
 	ExpiresAt        *time.Time
+	Resources        []CreditResource
+}
+type CreditResource struct {
+	Code, Name             string
+	Total, Remaining, Used float64
+	ExpiresAt              *time.Time
 }
 
-func NewClient() *Client { return &Client{http: &http.Client{Timeout: 20 * time.Second}} }
+const (
+	resourceSummaryPath = "/billing/meter/get-user-resource-summary"
+	resourcePaidPath    = "/billing/meter/get-user-resource-paid-packages"
+	resourceFreePath    = "/billing/meter/get-user-resource-free-packages"
+)
+
+var paidPackageCodes = []string{
+	"TCACA_code_002_AkiJS3ZHF5", "TCACA_code_023_4xbGhMrE6q", "TCACA_code_026_BaESVICNoi", "TCACA_code_027_0FCGVA6vSa",
+	"TCACA_code_009_0XmEQc2xOf", "TCACA_code_038_OhvqZtiPKr", "TCACA_code_003_FAnt7lcmRT", "TCACA_code_036_lupO5WgNdG",
+}
+
+var freePackageCodes = []string{
+	"TCACA_code_008_cfWoLwvjU4", "TCACA_code_007_nzdH5h4Nl0", "TCACA_code_028_NtpWi0jzXs", "TCACA_code_029_6wCGEWquYy",
+	"TCACA_code_030_BjSt89qTvr", "TCACA_code_001_PqouKr6QWV", "TCACA_code_006_DbXS0lrypC", "TCACA_code_035_ArVxJcGDsm",
+	"TCACA_code_037_WxOD3MpI2o", "TCACA_code_039_KRcQj7wUat", "TCACA_code_040_mi9rCYg46x",
+}
+
+func NewClient() *Client { return &Client{http: netutil.NewHTTPClient(20 * time.Second)} }
 func ProviderVariant(providerID string) (Variant, error) {
 	if providerID == "workbuddy-cn" {
 		return VariantCN, nil
@@ -179,61 +205,122 @@ func (c *Client) Refresh(ctx context.Context, credential Credential) (Credential
 }
 
 func (c *Client) FetchCredits(ctx context.Context, credential *Credential) (Credits, bool, error) {
-	return c.fetchCredits(ctx, credential, true)
-}
-
-func (c *Client) fetchCredits(ctx context.Context, credential *Credential, allowRefresh bool) (Credits, bool, error) {
+	refreshed := false
 	if !credential.ExpiresAt.IsZero() && time.Until(credential.ExpiresAt) < 30*time.Minute && credential.RefreshToken != "" {
-		refreshed, err := c.Refresh(ctx, *credential)
-		if err == nil {
-			*credential = refreshed
+		if next, err := c.Refresh(ctx, *credential); err == nil {
+			*credential = next
+			refreshed = true
 		}
 	}
+	credits, unauthorized, err := c.fetchCreditsOnce(ctx, *credential)
+	if err == nil {
+		return credits, refreshed, nil
+	}
+	if !unauthorized || refreshed || credential.RefreshToken == "" {
+		return Credits{}, refreshed, err
+	}
+	next, refreshErr := c.Refresh(ctx, *credential)
+	if refreshErr != nil {
+		return Credits{}, refreshed, refreshErr
+	}
+	*credential = next
+	credits, _, err = c.fetchCreditsOnce(ctx, *credential)
+	return credits, true, err
+}
+
+func (c *Client) fetchCreditsOnce(ctx context.Context, credential Credential) (Credits, bool, error) {
+	if credential.Variant == VariantCN {
+		credits, recognized, unauthorized, err := c.fetchDomesticCredits(ctx, credential)
+		if err != nil || unauthorized || recognized {
+			return credits, unauthorized, err
+		}
+	}
+	return c.fetchLegacyCredits(ctx, credential)
+}
+
+func (c *Client) fetchDomesticCredits(ctx context.Context, credential Credential) (Credits, bool, bool, error) {
+	now := time.Now()
+	requests := []struct {
+		path  string
+		body  map[string]any
+		field string
+	}{
+		{resourceSummaryPath, map[string]any{}, "Packages"},
+		{resourcePaidPath, map[string]any{"PageNumber": 1, "PageSize": 200, "Status": []int{0, 3}, "PackageCodes": paidPackageCodes, "NeedRenewInfo": true}, "Accounts"},
+		{resourceFreePath, map[string]any{"PageNumber": 1, "PageSize": 200, "Status": []int{0, 3}, "SlicePeriodStartTime": now.Format("2006-01-02") + " 00:00:00", "SlicePeriodEndTime": now.Format("2006-01-02") + " 23:59:59", "PackageCodes": freePackageCodes}, "Accounts"},
+	}
+	var summary, details []CreditResource
+	recognized := false
+	for _, request := range requests {
+		value, status, err := c.requestResource(ctx, credential, []string{request.path}, request.body)
+		if err != nil {
+			return Credits{}, false, false, err
+		}
+		if isUnauthorized(status, value) {
+			return Credits{}, false, true, fmt.Errorf("WorkBuddy 登录已失效，请重新登录")
+		}
+		if status < 200 || status >= 300 || !isSuccessResponse(value) {
+			continue
+		}
+		items, present := resourceList(value, request.field)
+		if !present {
+			continue
+		}
+		recognized = true
+		normalized := normalizeResources(items, time.Now().UTC())
+		if request.field == "Packages" {
+			summary = normalized
+		} else {
+			details = append(details, normalized...)
+		}
+	}
+	if !recognized {
+		return Credits{}, false, false, nil
+	}
+	return summarizeResources(mergeResources(summary, details)), true, false, nil
+}
+
+func (c *Client) fetchLegacyCredits(ctx context.Context, credential Credential) (Credits, bool, error) {
 	body := map[string]any{"PageNumber": 1, "PageSize": 100, "ProductCode": "p_tcaca", "Status": []int{0, 3}, "PackageEndTimeRangeBegin": time.Now().Format("2006-01-02 15:04:05"), "PackageEndTimeRangeEnd": time.Now().AddDate(101, 0, 0).Format("2006-01-02 15:04:05")}
 	paths := []string{"/v2/billing/meter/get-user-resource"}
 	if credential.Variant == VariantGlobal {
 		paths = []string{"/billing/meter/get-user-resource", "/v2/billing/meter/get-user-resource"}
 	}
-	var lastStatus int
-	for _, path := range paths {
-		origin := apiBase(*credential)
-		headers := authHeaders(*credential, origin)
-		headers["X-Client-Platform"] = "web"
-		headers["Origin"] = origin
-		headers["Referer"] = origin + "/profile/plans-usage"
-		value, status, err := c.requestJSON(ctx, http.MethodPost, origin+path, body, headers)
-		lastStatus = status
-		if err != nil {
-			return Credits{}, false, err
-		}
-		if status == http.StatusUnauthorized || status == http.StatusForbidden {
-			if credential.RefreshToken == "" || !allowRefresh {
-				return Credits{}, false, fmt.Errorf("WorkBuddy 登录已失效，请重新登录")
-			}
-			refreshed, refreshErr := c.Refresh(ctx, *credential)
-			if refreshErr != nil {
-				return Credits{}, false, refreshErr
-			}
-			*credential = refreshed
-			return c.fetchCredits(ctx, credential, false)
-		}
-		if status == http.StatusNotFound {
-			continue
-		}
-		if status < 200 || status >= 300 {
-			return Credits{}, false, fmt.Errorf("WorkBuddy 积分接口返回 HTTP %d", status)
-		}
-		if code := intValue(value["code"]); code != 0 && code != 200 {
-			return Credits{}, false, fmt.Errorf("WorkBuddy 积分接口返回业务错误 code=%d", code)
-		}
-		resources := resourceAccounts(value)
-		if resources == nil {
-			return Credits{}, false, fmt.Errorf("WorkBuddy 积分响应缺少 Accounts")
-		}
-		result := summarize(resources)
-		return result, false, nil
+	value, status, err := c.requestResource(ctx, credential, paths, body)
+	if err != nil {
+		return Credits{}, false, err
 	}
-	return Credits{}, false, fmt.Errorf("WorkBuddy 积分接口不可用（HTTP %d）", lastStatus)
+	if isUnauthorized(status, value) {
+		return Credits{}, true, fmt.Errorf("WorkBuddy 登录已失效，请重新登录")
+	}
+	if status < 200 || status >= 300 {
+		return Credits{}, false, fmt.Errorf("WorkBuddy 积分接口返回 HTTP %d: %s", status, responseMessage(value))
+	}
+	if !isSuccessResponse(value) {
+		return Credits{}, false, fmt.Errorf("WorkBuddy 积分接口返回业务错误 code=%d: %s", responseCode(value), responseMessage(value))
+	}
+	items, present := resourceList(value, "Accounts")
+	if !present {
+		return Credits{}, false, fmt.Errorf("WorkBuddy 积分响应缺少 Accounts")
+	}
+	return summarizeResources(normalizeResources(items, time.Now().UTC())), false, nil
+}
+
+func (c *Client) requestResource(ctx context.Context, credential Credential, paths []string, body map[string]any) (map[string]any, int, error) {
+	origin := apiBase(credential)
+	var last map[string]any
+	var lastStatus int
+	for index, path := range paths {
+		value, status, err := c.requestJSON(ctx, http.MethodPost, origin+path, body, resourceHeaders(credential, origin))
+		if err != nil {
+			return nil, status, err
+		}
+		last, lastStatus = value, status
+		if index+1 == len(paths) || !isRouteMissing(status, value) {
+			return value, status, nil
+		}
+	}
+	return last, lastStatus, nil
 }
 
 func (c *Client) requestJSON(ctx context.Context, method, url string, body any, headers map[string]string) (map[string]any, int, error) {
@@ -260,15 +347,22 @@ func (c *Client) requestJSON(ctx context.Context, method, url string, body any, 
 		return nil, 0, fmt.Errorf("连接 WorkBuddy 官方接口失败: %w", err)
 	}
 	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("读取 WorkBuddy 响应失败: %w", err)
+	}
 	var value map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&value); err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("WorkBuddy 响应不是有效 JSON: %w", err)
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		value = map[string]any{"message": strings.TrimSpace(string(raw))}
 	}
 	return value, resp.StatusCode, nil
 }
 
-func resourceAccounts(root map[string]any) []map[string]any {
-	paths := [][]string{{"data", "Accounts"}, {"data", "data", "Accounts"}, {"data", "Response", "Data", "Accounts"}, {"data", "data", "Response", "Data", "Accounts"}}
+func resourceList(root map[string]any, field string) ([]map[string]any, bool) {
+	lower := strings.ToLower(field)
+	paths := [][]string{{"data", field}, {"data", "data", field}, {"data", "Response", "Data", field}, {"data", "data", "Response", "Data", field}, {"data", lower}, {"data", "data", lower}}
 	for _, path := range paths {
 		var current any = root
 		for _, key := range path {
@@ -286,37 +380,180 @@ func resourceAccounts(root map[string]any) []map[string]any {
 					result = append(result, object)
 				}
 			}
-			return result
+			return result, true
 		}
 	}
-	return nil
+	return nil, false
 }
-func summarize(resources []map[string]any) Credits {
-	result := Credits{}
+
+func normalizeResources(items []map[string]any, now time.Time) []CreditResource {
+	result := make([]CreditResource, 0, len(items))
+	for _, item := range items {
+		result = append(result, normalizeResource(item, now))
+	}
+	return result
+}
+
+func normalizeResource(resource map[string]any, now time.Time) CreditResource {
+	slice := map[string]any{}
+	for _, key := range []string{"SlicePeriodUsageDetails", "slicePeriodUsageDetails"} {
+		if array, ok := resource[key].([]any); ok && len(array) > 0 {
+			slice, _ = array[0].(map[string]any)
+		}
+	}
+	totalKeys := []string{"CycleCapacitySizePrecise", "CycleCapacitySize", "CycleTotalCapacity", "CapacitySizePrecise", "CapacitySize", "SlicePeriodCapacitySizePrecise", "SlicePeriodCapacitySize"}
+	remainingKeys := []string{"CycleCapacityRemainPrecise", "CycleCapacityRemain", "CycleRemainCapacity", "CapacityRemainPrecise", "CapacityRemain", "SlicePeriodCapacityRemainPrecise", "SlicePeriodCapacityRemain"}
+	usedKeys := []string{"CycleCapacityUsedPrecise", "CycleCapacityUsed", "CycleUsedCapacity", "CapacityUsedPrecise", "CapacityUsed", "SlicePeriodCapacityUsedPrecise", "SlicePeriodCapacityUsed"}
+	total, hasTotal := firstNumberOK(resource, totalKeys...)
+	if !hasTotal {
+		total, hasTotal = firstNumberOK(slice, totalKeys...)
+	}
+	remaining, hasRemaining := firstNumberOK(resource, remainingKeys...)
+	if !hasRemaining {
+		remaining, hasRemaining = firstNumberOK(slice, remainingKeys...)
+	}
+	used, hasUsed := firstNumberOK(resource, usedKeys...)
+	if !hasUsed {
+		used, hasUsed = firstNumberOK(slice, usedKeys...)
+	}
+	if !hasTotal {
+		switch {
+		case hasRemaining && hasUsed:
+			total = remaining + used
+		case hasRemaining:
+			total = remaining
+		case hasUsed:
+			total = used
+		}
+	}
+	if !hasRemaining {
+		remaining = maxFloat(total-used, 0)
+	}
+	if !hasUsed {
+		used = maxFloat(total-remaining, 0)
+	}
+	return CreditResource{Code: firstString(resource, nil, "PackageCode", "packageCode"), Name: firstString(resource, nil, "PackageName", "packageName"), Total: maxFloat(total, 0), Remaining: maxFloat(remaining, 0), Used: maxFloat(used, 0), ExpiresAt: resolveExpiry(resource, now)}
+}
+
+func resolveExpiry(resource map[string]any, now time.Time) *time.Time {
+	var deduction, cycle *time.Time
+	for _, key := range []string{"DeductionEndTime", "deductionEndTime", "ExpiredTime", "expiredTime"} {
+		if value, ok := parseTime(resource[key]); ok {
+			copy := value
+			deduction = &copy
+			break
+		}
+	}
+	for _, key := range []string{"CycleEndTime", "cycleEndTime"} {
+		if value, ok := parseTime(resource[key]); ok {
+			copy := value
+			cycle = &copy
+			break
+		}
+	}
+	result := deduction
+	if result == nil || (cycle != nil && result.Sub(*cycle) > 365*24*time.Hour) {
+		result = cycle
+	}
+	if result != nil && result.Sub(now) > 730*24*time.Hour {
+		return nil
+	}
+	return result
+}
+
+func mergeResources(summary, details []CreditResource) []CreditResource {
+	codes := map[string]bool{}
+	for _, item := range details {
+		if item.Code != "" {
+			codes[item.Code] = true
+		}
+	}
+	result := append([]CreditResource{}, details...)
+	for _, item := range summary {
+		if item.Code == "" || !codes[item.Code] {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func summarizeResources(resources []CreditResource) Credits {
+	result := Credits{Resources: resources}
 	for _, resource := range resources {
-		total := firstNumber(resource, "CycleCapacitySizePrecise", "CycleCapacitySize", "CycleTotalCapacity", "CapacitySizePrecise", "CapacitySize", "SlicePeriodCapacitySizePrecise", "SlicePeriodCapacitySize")
-		remaining := firstNumber(resource, "CycleCapacityRemainPrecise", "CycleCapacityRemain", "CycleRemainCapacity", "CapacityRemainPrecise", "CapacityRemain", "SlicePeriodCapacityRemainPrecise", "SlicePeriodCapacityRemain")
-		result.Total += total
-		result.Remaining += remaining
-		for _, key := range []string{"DeductionEndTime", "deductionEndTime", "CycleEndTime", "cycleEndTime", "ExpiredTime", "expiredTime"} {
-			if resource[key] == nil {
-				continue
-			}
-			if value, ok := parseTime(resource[key]); ok && (result.ExpiresAt == nil || value.Before(*result.ExpiresAt)) {
-				copy := value
-				result.ExpiresAt = &copy
-			}
+		result.Total += resource.Total
+		result.Remaining += resource.Remaining
+		if resource.Remaining > 0 && resource.ExpiresAt != nil && (result.ExpiresAt == nil || resource.ExpiresAt.Before(*result.ExpiresAt)) {
+			copy := *resource.ExpiresAt
+			result.ExpiresAt = &copy
 		}
 	}
 	return result
 }
 func firstNumber(object map[string]any, keys ...string) float64 {
+	value, _ := firstNumberOK(object, keys...)
+	return value
+}
+func firstNumberOK(object map[string]any, keys ...string) (float64, bool) {
 	for _, key := range keys {
 		if value, ok := number(object[key]); ok {
-			return value
+			return value, true
 		}
 	}
-	return 0
+	return 0, false
+}
+func resourceHeaders(credential Credential, origin string) map[string]string {
+	headers := authHeaders(credential, origin)
+	headers["X-Client-Platform"] = "web"
+	headers["Origin"] = origin
+	headers["Referer"] = origin + "/profile/plans-usage"
+	return headers
+}
+func responseCode(value map[string]any) int {
+	if code, ok := number(value["code"]); ok {
+		return int(code)
+	}
+	if data, ok := value["data"].(map[string]any); ok {
+		if code, ok := number(data["code"]); ok {
+			return int(code)
+		}
+	}
+	return -1
+}
+func isSuccessResponse(value map[string]any) bool {
+	code := responseCode(value)
+	if code == 0 || code == 200 {
+		return true
+	}
+	if code != -1 {
+		return false
+	}
+	_, hasData := value["data"]
+	return hasData && value["ok"] != false && value["success"] != false
+}
+func isUnauthorized(status int, value map[string]any) bool {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return true
+	}
+	code := responseCode(value)
+	return code != 10085 && (code == 401 || code == 403)
+}
+func isRouteMissing(status int, value map[string]any) bool {
+	return status == http.StatusNotFound || responseCode(value) == 404
+}
+func responseMessage(value map[string]any) string {
+	for _, key := range []string{"message", "msg"} {
+		if text := stringValue(value[key]); text != "" {
+			return text
+		}
+	}
+	if data, ok := value["data"].(map[string]any); ok {
+		for _, key := range []string{"message", "msg"} {
+			if text := stringValue(data[key]); text != "" {
+				return text
+			}
+		}
+	}
+	return "响应未提供错误详情"
 }
 func authHeaders(credential Credential, _ string) map[string]string {
 	headers := map[string]string{"Authorization": "Bearer " + credential.AccessToken}
@@ -358,10 +595,10 @@ func apiBase(credential Credential) string {
 }
 func validateDomain(variant Variant, domain string) error {
 	value := strings.ToLower(strings.TrimSpace(domain))
-	if variant == VariantGlobal && !strings.HasSuffix(value, ".workbuddy.ai") {
+	if variant == VariantGlobal && value != "workbuddy.ai" && value != "www.workbuddy.ai" {
 		return fmt.Errorf("登录响应域名与 WorkBuddy 国际版不符")
 	}
-	if variant == VariantCN && strings.HasSuffix(value, ".workbuddy.ai") {
+	if variant == VariantCN && value != "codebuddy.cn" && value != "www.codebuddy.cn" && value != "workbuddy.cn" && value != "www.workbuddy.cn" {
 		return fmt.Errorf("登录响应域名与 WorkBuddy 国内版不符")
 	}
 	return nil
@@ -425,11 +662,20 @@ func parseTime(value any) (time.Time, bool) {
 		return time.Unix(seconds, 0).UTC(), true
 	}
 	if text, ok := value.(string); ok {
-		for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05"} {
+		for _, layout := range []string{time.RFC3339, time.RFC3339Nano, "2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05", "2006-01-02"} {
 			if parsed, err := time.ParseInLocation(layout, text, time.Local); err == nil {
+				if layout == "2006-01-02" {
+					parsed = parsed.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+				}
 				return parsed.UTC(), true
 			}
 		}
 	}
 	return time.Time{}, false
+}
+func maxFloat(left, right float64) float64 {
+	if left > right {
+		return left
+	}
+	return right
 }

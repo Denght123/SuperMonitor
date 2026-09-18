@@ -521,21 +521,21 @@ func (s *Store) EnsureProviderCatalog(ctx context.Context) error {
 		id, name, region, tier, status string
 		auth, capabilities             []string
 	}{
-		{"trae-cn", "TRAE CN / TraeCode / TraeWork", "CN", "community", "pending", []string{"oauth", "credential_import"}, []string{"quota", "usage"}},
-		{"qoder-cn", "Qoder CN", "CN", "community", "pending", []string{"oauth"}, []string{"quota"}},
+		{"trae-cn", "TRAE CN / TraeCode / TraeWork", "CN", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota", "usage"}},
+		{"qoder-cn", "Qoder CN", "CN", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota"}},
 		{"workbuddy-cn", "WorkBuddy / CodeBuddy 国内版", "CN", "community", "healthy", []string{"oauth", "credential_import"}, []string{"credits", "checkin"}},
-		{"coze-cn", "扣子 Coze", "CN", "official", "pending", []string{"oauth"}, []string{"credits", "usage"}},
-		{"bailian", "阿里云百炼 Token Plan", "CN", "official", "pending", []string{"oauth", "api_key"}, []string{"token_plan", "usage"}},
+		{"coze-cn", "扣子 Coze", "CN", "official", "healthy", []string{"custom_endpoint", "api_key"}, []string{"credits", "usage"}},
+		{"bailian", "阿里云百炼 Token Plan", "CN", "official", "healthy", []string{"custom_endpoint", "api_key"}, []string{"token_plan", "usage"}},
 		{"mimo", "小米 MiMo（基元混动）", "CN", "community", "healthy", []string{"cookie"}, []string{"token_plan"}},
 		{"deepseek", "DeepSeek", "CN", "official", "healthy", []string{"api_key"}, []string{"balance"}},
-		{"zhipu", "智谱 AI", "CN", "official", "pending", []string{"api_key", "oauth"}, []string{"balance", "usage"}},
+		{"zhipu", "智谱 AI", "CN", "official", "healthy", []string{"custom_endpoint", "api_key"}, []string{"balance", "usage"}},
 		{"codex", "Codex", "Global", "community", "healthy", []string{"device_code", "credential_import"}, []string{"quota", "credits"}},
-		{"gemini-cli", "Gemini", "Global", "official", "pending", []string{"oauth"}, []string{"quota", "usage"}},
-		{"claude-code", "Claude Code", "Global", "community", "pending", []string{"oauth", "credential_import"}, []string{"quota", "usage"}},
-		{"qoder-global", "Qoder 国际版", "Global", "community", "pending", []string{"oauth"}, []string{"quota"}},
+		{"gemini-cli", "Gemini", "Global", "official", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota", "usage"}},
+		{"claude-code", "Claude Code", "Global", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota", "usage"}},
+		{"qoder-global", "Qoder 国际版", "Global", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota"}},
 		{"workbuddy-global", "WorkBuddy / CodeBuddy 国际版", "Global", "community", "healthy", []string{"oauth", "credential_import"}, []string{"credits"}},
-		{"kiro", "Kiro", "Global", "community", "pending", []string{"oauth"}, []string{"quota"}},
-		{"cursor", "Cursor", "Global", "community", "pending", []string{"oauth", "credential_import"}, []string{"quota", "usage"}},
+		{"kiro", "Kiro", "Global", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota"}},
+		{"cursor", "Cursor", "Global", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota", "usage"}},
 	}
 	for _, provider := range providers {
 		auth, _ := json.Marshal(provider.auth)
@@ -569,8 +569,7 @@ func providerPresentation(id string) (string, string, bool) {
 	if strings.HasSuffix(id, "-cn") || id == "coze-cn" || id == "bailian" || id == "mimo" || id == "deepseek" || id == "zhipu" {
 		category = "国内平台"
 	}
-	live := map[string]bool{"codex": true, "workbuddy-cn": true, "workbuddy-global": true, "deepseek": true, "mimo": true}
-	return description, category, live[id]
+	return description, category, true
 }
 
 func valueOrZero(value *float64) float64 {

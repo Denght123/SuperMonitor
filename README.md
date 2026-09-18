@@ -2,7 +2,7 @@
 
 SuperMonitor is an open-source, self-hosted control plane for monitoring AI and coding-agent quotas, credits, balances, refresh windows, and usage history.
 
-> Current status: **v0.3 real provider connections**. Codex, WorkBuddy / CodeBuddy CN and Global, DeepSeek, and Xiaomi MiMo support real local authentication and live quota retrieval. Other provider cards remain disabled until their protocols are verified.
+> Current status: **v0.4 provider protocol overhaul**. Codex, WorkBuddy / CodeBuddy CN and Global, DeepSeek, and Xiaomi MiMo have built-in live adapters. Every catalog platform can also connect through a verified custom quota endpoint mapping; an account is saved only after the endpoint authenticates and returns a valid live value.
 
 ## Principles
 
@@ -13,11 +13,15 @@ SuperMonitor is an open-source, self-hosted control plane for monitoring AI and 
 
 ## Live monitoring adapters
 
-- Codex: import `auth.json` or use OpenAI's official device-code flow, then read native quota windows.
-- WorkBuddy / CodeBuddy CN and Global: import a credential file or use official QR OAuth, then read billing credits and expiry.
+- Codex: import native `auth.json`, CPA/Sub2API-compatible JSON, or use OpenAI's official device-code flow, then read native quota windows.
+- WorkBuddy / CodeBuddy CN: import a credential file or use official QR OAuth, then aggregate summary, paid-package, and free-package credits with real expiry times.
+- WorkBuddy / CodeBuddy Global: import a credential file or use official QR OAuth, then read the international legacy billing endpoint.
 - DeepSeek: enter an API key to read the official account balance.
 - Xiaomi MiMo: paste the authenticated console Cookie to read Token Plan usage and reset time.
+- TRAE, Qoder, Coze, Bailian, Zhipu, Gemini, Claude Code, Kiro, and Cursor: configure the platform's real quota URL, authentication header/Cookie, and JSON field paths. SuperMonitor validates the live response before persisting the account.
 - Store every credential with AES-GCM using a random key created in `SUPMON_DATA_DIR`.
+
+On Windows, outbound provider clients honor proxy environment variables first and then the current user's Internet Settings proxy. This keeps the service on the same route as the browser for region-sensitive OAuth endpoints.
 
 Uploaded files are parsed in memory and are not retained as files. Tokens are never returned to the browser.
 

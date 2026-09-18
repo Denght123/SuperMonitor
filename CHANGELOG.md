@@ -2,6 +2,21 @@
 
 All notable changes to SuperMonitor are documented here.
 
+## [0.4.0] - 2026-09-18
+
+### Added
+
+- Windows system-proxy discovery for all provider clients, fixing Codex device login when the browser uses a local proxy.
+- CPA, Sub2API, nested, array, camelCase, and refresh-token-only Codex credential imports.
+- WorkBuddy CN summary/paid/free resource aggregation with per-package balances and real expiry handling.
+- Verified custom quota endpoint connections for every remaining catalog platform; accounts are saved only after a live response is authenticated and mapped.
+
+### Changed
+
+- Rebuilt quota and account views into CPA-style provider groups with three-to-four compact cards per row.
+- Reduced typography and visual density, normalized control alignment, and moved to a quiet light gray palette.
+- Replaced every pending provider card with an actionable connection form while preserving honest live-data validation.
+
 ## [0.3.0] - 2026-09-18
 
 ### Added

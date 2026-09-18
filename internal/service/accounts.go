@@ -11,6 +11,7 @@ import (
 	"github.com/Denght123/SuperMonitor/internal/domain"
 	"github.com/Denght123/SuperMonitor/internal/integration/codex"
 	"github.com/Denght123/SuperMonitor/internal/integration/deepseek"
+	"github.com/Denght123/SuperMonitor/internal/integration/genericquota"
 	"github.com/Denght123/SuperMonitor/internal/integration/mimo"
 	"github.com/Denght123/SuperMonitor/internal/integration/workbuddy"
 	"github.com/Denght123/SuperMonitor/internal/secure"
@@ -23,6 +24,7 @@ type Accounts struct {
 	vault     *secure.Vault
 	codex     *codex.Client
 	deepseek  *deepseek.Client
+	generic   *genericquota.Client
 	mimo      *mimo.Client
 	workbuddy *workbuddy.Client
 	events    *EventHub
@@ -42,13 +44,19 @@ type DeviceLoginSession struct {
 }
 
 func NewAccounts(store *sqlite.Store, vault *secure.Vault, events *EventHub) *Accounts {
-	return &Accounts{store: store, vault: vault, codex: codex.NewClient(), deepseek: deepseek.NewClient(), mimo: mimo.NewClient(), workbuddy: workbuddy.NewClient(), events: events, sessions: make(map[string]*DeviceLoginSession)}
+	return &Accounts{store: store, vault: vault, codex: codex.NewClient(), deepseek: deepseek.NewClient(), generic: genericquota.NewClient(), mimo: mimo.NewClient(), workbuddy: workbuddy.NewClient(), events: events, sessions: make(map[string]*DeviceLoginSession)}
 }
 
 func (s *Accounts) ImportCodex(ctx context.Context, alias string, raw []byte) (domain.AccountSummary, error) {
 	credential, err := codex.ParseCredential(raw)
 	if err != nil {
 		return domain.AccountSummary{}, err
+	}
+	if credential.AccessToken == "" && credential.RefreshToken != "" {
+		credential, err = s.codex.Refresh(ctx, credential.RefreshToken)
+		if err != nil {
+			return domain.AccountSummary{}, fmt.Errorf("OAuth 文件仅含 refresh_token，但刷新失败: %w", err)
+		}
 	}
 	return s.connectCodexWithID(ctx, "codex-"+uuid.NewString(), alias, "credential_import", credential)
 }
@@ -75,6 +83,13 @@ func (s *Accounts) ConnectMimo(ctx context.Context, alias, cookie string) (domai
 		return domain.AccountSummary{}, err
 	}
 	return s.connectMimoWithID(ctx, "mimo-"+uuid.NewString(), alias, mimo.Credential{Cookie: normalized})
+}
+
+func (s *Accounts) ConnectGeneric(ctx context.Context, providerID, alias string, credential genericquota.Credential) (domain.AccountSummary, error) {
+	if _, _, supported := providerMeta(providerID); !supported {
+		return domain.AccountSummary{}, fmt.Errorf("未知平台 %s", providerID)
+	}
+	return s.connectGenericWithID(ctx, providerID+"-"+uuid.NewString(), providerID, alias, credential)
 }
 
 func (s *Accounts) StartCodexDeviceLogin(ctx context.Context, alias string) (DeviceLoginSession, error) {
@@ -188,6 +203,12 @@ func (s *Accounts) RefreshOne(ctx context.Context, id string) (domain.AccountSum
 			return domain.AccountSummary{}, credentialError(err)
 		}
 		return s.connectWorkBuddyWithID(ctx, account.ID, account.ProviderID, account.Alias, account.AuthMethod, credential)
+	case "trae-cn", "qoder-cn", "coze-cn", "bailian", "zhipu", "gemini-cli", "claude-code", "qoder-global", "kiro", "cursor":
+		var credential genericquota.Credential
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			return domain.AccountSummary{}, credentialError(err)
+		}
+		return s.connectGenericWithID(ctx, account.ID, account.ProviderID, account.Alias, credential)
 	default:
 		return domain.AccountSummary{}, fmt.Errorf("平台 %s 尚未实现真实刷新", account.ProviderID)
 	}
@@ -271,18 +292,50 @@ func (s *Accounts) connectWorkBuddyWithID(ctx context.Context, id, providerID, a
 	if strings.TrimSpace(alias) == "" {
 		alias = firstNonEmpty(credential.Email, credential.Nickname, "WorkBuddy 账号")
 	}
-	signal := domain.QuotaSignal{ID: "workbuddy-live-credits", Label: "积分余额", Kind: "credits", Value: credits.Remaining, Unit: "credits", ExpiresAt: credits.ExpiresAt, Status: "healthy", Source: "WorkBuddy Billing", Confidence: "live"}
+	name, _, _ := providerMeta(providerID)
+	signal := domain.QuotaSignal{ID: "workbuddy-live-credits", Provider: name, Label: "总积分余额", Kind: "credits", Value: credits.Remaining, Unit: "credits", ExpiresAt: credits.ExpiresAt, Status: "healthy", Source: "WorkBuddy Billing", Confidence: "live"}
 	if credits.Total > 0 {
 		signal.Total = &credits.Total
 		percent := credits.Remaining / credits.Total * 100
 		signal.RemainingPercent = &percent
 		signal.Status = quotaStatus(percent)
 	}
-	name, _, _ := providerMeta(providerID)
-	signal.Provider = name
+	windows := []domain.QuotaSignal{signal}
+	for index, resource := range credits.Resources {
+		label := firstNonEmpty(resource.Name, shortPackageCode(resource.Code), fmt.Sprintf("积分包 %d", index+1))
+		window := domain.QuotaSignal{ID: fmt.Sprintf("workbuddy-package-%d", index), Provider: name, Label: label, Kind: "credits", Value: resource.Remaining, Unit: "credits", ExpiresAt: resource.ExpiresAt, Status: "healthy", Source: "WorkBuddy Billing", Confidence: "live"}
+		if resource.Total > 0 {
+			total := resource.Total
+			percent := resource.Remaining / total * 100
+			window.Total = &total
+			window.RemainingPercent = &percent
+			window.Status = quotaStatus(percent)
+		}
+		windows = append(windows, window)
+	}
 	now := time.Now().UTC().Truncate(time.Second)
-	account := newConnected(id, providerID, alias, credential.Email, "Credits", authMethod, "WorkBuddy 官方 Billing", []domain.QuotaSignal{signal}, now)
+	account := newConnected(id, providerID, alias, credential.Email, "Credits", authMethod, "WorkBuddy 官方 Billing", windows, now)
 	return s.persist(ctx, account, credential, "WorkBuddy")
+}
+
+func (s *Accounts) connectGenericWithID(ctx context.Context, id, providerID, alias string, credential genericquota.Credential) (domain.AccountSummary, error) {
+	reading, err := s.generic.Fetch(ctx, credential)
+	if err != nil {
+		return domain.AccountSummary{}, fmt.Errorf("无法读取真实额度: %w", err)
+	}
+	name, _, _ := providerMeta(providerID)
+	if strings.TrimSpace(alias) == "" {
+		alias = name + " 账号"
+	}
+	signal := domain.QuotaSignal{ID: providerID + "-live-quota", Provider: name, Label: credential.Label, Kind: credential.Kind, Value: reading.Value, Total: reading.Total, Unit: credential.Unit, ResetAt: reading.ResetAt, ExpiresAt: reading.ExpiresAt, Status: "healthy", Source: "用户配置的真实额度接口", Confidence: "live"}
+	if reading.Total != nil && *reading.Total > 0 {
+		percent := reading.Value / *reading.Total * 100
+		signal.RemainingPercent = &percent
+		signal.Status = quotaStatus(percent)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := newConnected(id, providerID, alias, "", credential.Label, "custom_endpoint", "已验证自定义额度 API", []domain.QuotaSignal{signal}, now)
+	return s.persist(ctx, account, credential, name)
 }
 
 func (s *Accounts) persist(ctx context.Context, account domain.ConnectedAccount, credential any, eventProvider string) (domain.AccountSummary, error) {
@@ -353,24 +406,25 @@ func signalSummary(signal domain.QuotaSignal) string {
 	}
 	return fmt.Sprintf("%s %.2f %s", signal.Label, signal.Value, signal.Unit)
 }
-func providerMeta(id string) (string, string, string) {
-	switch id {
-	case "codex":
-		return "Codex", "Global", "Codex CLI"
-	case "deepseek":
-		return "DeepSeek", "CN", "DeepSeek API"
-	case "mimo":
-		return "小米 MiMo（基元混动）", "CN", "MiMo Token Plan"
-	case "workbuddy-cn":
-		return "WorkBuddy / CodeBuddy 国内版", "CN", "WorkBuddy"
-	case "workbuddy-global":
-		return "WorkBuddy / CodeBuddy 国际版", "Global", "WorkBuddy AI"
+func providerMeta(id string) (string, string, bool) {
+	providers := map[string][2]string{
+		"trae-cn": {"TRAE CN / TraeCode / TraeWork", "CN"}, "qoder-cn": {"Qoder CN", "CN"},
+		"workbuddy-cn": {"WorkBuddy / CodeBuddy 国内版", "CN"}, "coze-cn": {"扣子 Coze", "CN"},
+		"bailian": {"阿里云百炼 Token Plan", "CN"}, "mimo": {"小米 MiMo（基元混动）", "CN"},
+		"deepseek": {"DeepSeek", "CN"}, "zhipu": {"智谱 AI", "CN"}, "codex": {"Codex", "Global"},
+		"gemini-cli": {"Gemini", "Global"}, "claude-code": {"Claude Code", "Global"},
+		"qoder-global": {"Qoder 国际版", "Global"}, "workbuddy-global": {"WorkBuddy / CodeBuddy 国际版", "Global"},
+		"kiro": {"Kiro", "Global"}, "cursor": {"Cursor", "Global"},
 	}
-	return id, "Global", id
+	provider, ok := providers[id]
+	if !ok {
+		return id, "Global", false
+	}
+	return provider[0], provider[1], true
 }
 func providerServices(id string) []string {
-	_, _, service := providerMeta(id)
-	return []string{service}
+	name, _, _ := providerMeta(id)
+	return []string{name}
 }
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
@@ -379,6 +433,17 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return "账号"
+}
+func shortPackageCode(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	parts := strings.Split(value, "_")
+	if len(parts) >= 3 {
+		return "积分包 " + parts[2]
+	}
+	return value
 }
 func credentialError(err error) error { return fmt.Errorf("读取本地加密凭据失败: %w", err) }
 func friendlyLoginError(err error) string {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Denght123/SuperMonitor/internal/integration/genericquota"
 	"github.com/Denght123/SuperMonitor/internal/service"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -128,6 +129,26 @@ func New(deps Dependencies) http.Handler {
 			}
 			if err != nil {
 				writeError(w, providerErrorStatus(err), "secret_connection_failed", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusCreated, account)
+		})
+		api.Post("/providers/{providerID}/accounts/custom", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Accounts == nil {
+				writeError(w, http.StatusServiceUnavailable, "accounts_unavailable", "账号服务未启用")
+				return
+			}
+			var payload struct {
+				Alias string `json:"alias"`
+				genericquota.Credential
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128*1024)).Decode(&payload); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_payload", "请求内容无效")
+				return
+			}
+			account, err := deps.Accounts.ConnectGeneric(r.Context(), chi.URLParam(r, "providerID"), payload.Alias, payload.Credential)
+			if err != nil {
+				writeError(w, providerErrorStatus(err), "custom_connection_failed", err.Error())
 				return
 			}
 			writeJSON(w, http.StatusCreated, account)
@@ -304,7 +325,7 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 
 func providerErrorStatus(err error) int {
 	message := err.Error()
-	for _, marker := range []string{"为空", "无效", "缺少", "不是有效", "已失效", "不支持", "不符"} {
+	for _, marker := range []string{"为空", "无效", "缺少", "不是有效", "已失效", "不支持", "不符", "找不到", "无法解析"} {
 		if strings.Contains(message, marker) {
 			return http.StatusBadRequest
 		}

@@ -84,6 +84,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/providers/{providerID}/accounts/custom": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["connectCustomQuotaEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/providers/{providerID}/oauth": {
         parameters: {
             query?: never;
@@ -243,7 +259,7 @@ export interface components {
             provider: string;
             label: string;
             /** @enum {string} */
-            kind: "credits" | "balance" | "rate_window" | "token_plan";
+            kind: "quota" | "credits" | "balance" | "rate_window" | "token_plan";
             value: number;
             total?: number;
             unit: string;
@@ -437,6 +453,51 @@ export interface operations {
         };
         responses: {
             /** @description Secret verified and live quota fetched */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSummary"];
+                };
+            };
+        };
+    };
+    connectCustomQuotaEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                providerID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    alias?: string;
+                    /** Format: uri */
+                    endpoint: string;
+                    /** @enum {string} */
+                    method: "GET" | "POST";
+                    /** @enum {string} */
+                    authType: "bearer" | "header" | "cookie" | "none";
+                    headerName?: string;
+                    headerPrefix?: string;
+                    secret?: string;
+                    requestBody?: string;
+                    valuePath: string;
+                    totalPath?: string;
+                    resetAtPath?: string;
+                    expiresAtPath?: string;
+                    label: string;
+                    unit: string;
+                    kind: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Endpoint authenticated, response mapping verified, and account saved */
             201: {
                 headers: {
                     [name: string]: unknown;

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Denght123/SuperMonitor/internal/netutil"
 )
 
 const usageURL = "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage"
@@ -22,7 +24,7 @@ type Usage struct {
 	ResetAt                       *time.Time
 }
 
-func NewClient() *Client { return &Client{http: &http.Client{Timeout: 20 * time.Second}} }
+func NewClient() *Client { return &Client{http: netutil.NewHTTPClient(20 * time.Second)} }
 
 func NormalizeCookie(raw string) (string, error) {
 	text := strings.TrimSpace(raw)
@@ -110,7 +112,7 @@ func (c *Client) fetch(ctx context.Context, url, cookie string) (map[string]any,
 	req.Header.Set("Origin", "https://platform.xiaomimimo.com")
 	req.Header.Set("Referer", "https://platform.xiaomimimo.com/#/console/balance")
 	req.Header.Set("x-timeZone", "Asia/Shanghai")
-	req.Header.Set("User-Agent", "Mozilla/5.0 SuperMonitor/0.3.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 SuperMonitor/0.4.0")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("MiMo usage 请求失败: %w", err)

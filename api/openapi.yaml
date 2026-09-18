@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: SuperMonitor API
-  version: 0.3.0
+  version: 0.4.0
   description: Monitoring-only API. It intentionally exposes no model proxy endpoints.
 servers:
   - url: /api/v1
@@ -82,6 +82,43 @@ paths:
       responses:
         "201":
           description: Secret verified and live quota fetched
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountSummary" }
+  /providers/{providerID}/accounts/custom:
+    post:
+      operationId: connectCustomQuotaEndpoint
+      parameters:
+        - in: path
+          name: providerID
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint, method, authType, valuePath, label, unit, kind]
+              properties:
+                alias: { type: string }
+                endpoint: { type: string, format: uri }
+                method: { type: string, enum: [GET, POST] }
+                authType: { type: string, enum: [bearer, header, cookie, none] }
+                headerName: { type: string }
+                headerPrefix: { type: string }
+                secret: { type: string }
+                requestBody: { type: string }
+                valuePath: { type: string }
+                totalPath: { type: string }
+                resetAtPath: { type: string }
+                expiresAtPath: { type: string }
+                label: { type: string }
+                unit: { type: string }
+                kind: { type: string }
+      responses:
+        "201":
+          description: Endpoint authenticated, response mapping verified, and account saved
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AccountSummary" }
@@ -253,7 +290,7 @@ components:
         id: { type: string }
         provider: { type: string }
         label: { type: string }
-        kind: { type: string, enum: [credits, balance, rate_window, token_plan] }
+        kind: { type: string, enum: [quota, credits, balance, rate_window, token_plan] }
         value: { type: number }
         total: { type: number }
         unit: { type: string }

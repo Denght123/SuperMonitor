@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Denght123/SuperMonitor/internal/netutil"
 )
 
 const balanceURL = "https://api.deepseek.com/user/balance"
@@ -22,7 +24,7 @@ type Balance struct {
 	Available                bool
 }
 
-func NewClient() *Client { return &Client{http: &http.Client{Timeout: 20 * time.Second}} }
+func NewClient() *Client { return &Client{http: netutil.NewHTTPClient(20 * time.Second)} }
 
 func (c *Client) FetchBalance(ctx context.Context, credential Credential) (Balance, error) {
 	if strings.TrimSpace(credential.APIKey) == "" {

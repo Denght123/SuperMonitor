@@ -9,8 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/Denght123/SuperMonitor/internal/netutil"
 )
 
 const (
@@ -21,7 +24,7 @@ const (
 	deviceVerificationURL = "https://auth.openai.com/codex/device"
 	deviceRedirectURI     = "https://auth.openai.com/deviceauth/callback"
 	usageURL              = "https://chatgpt.com/backend-api/wham/usage"
-	userAgent             = "codex_cli_rs/0.154.0 (Windows; x86_64) SuperMonitor/0.3.0"
+	userAgent             = "codex_cli_rs/0.154.0 (Windows; x86_64) SuperMonitor/0.4.0"
 )
 
 type Client struct {
@@ -67,30 +70,33 @@ type deviceTokenResponse struct {
 }
 
 func NewClient() *Client {
-	return &Client{http: &http.Client{Timeout: 15 * time.Second}}
+	return &Client{http: netutil.NewHTTPClient(20 * time.Second)}
 }
 
 func ParseCredential(raw []byte) (Credential, error) {
 	if len(raw) == 0 || len(raw) > 1024*1024 {
 		return Credential{}, fmt.Errorf("OAuth 文件为空或超过 1 MB")
 	}
-	var root map[string]any
+	var root any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if err := decoder.Decode(&root); err != nil {
 		return Credential{}, fmt.Errorf("OAuth 文件不是有效 JSON: %w", err)
 	}
-	tokens := objectAt(root, "tokens")
+	maps := credentialMaps(root)
 	credential := Credential{
-		AccessToken:  firstString(tokens, root, "access_token", "accessToken"),
-		RefreshToken: firstString(tokens, root, "refresh_token", "refreshToken"),
-		IDToken:      firstString(tokens, root, "id_token", "idToken"),
-		AccountID:    firstString(tokens, root, "account_id", "accountId", "chatgpt_account_id"),
-		Email:        firstString(tokens, root, "email"),
-		Plan:         firstString(tokens, root, "plan_type", "plan"),
+		AccessToken:  firstStringFromMaps(maps, "access_token", "accessToken", "access", "token"),
+		RefreshToken: firstStringFromMaps(maps, "refresh_token", "refreshToken", "refresh"),
+		IDToken:      firstStringFromMaps(maps, "id_token", "idToken"),
+		AccountID:    firstStringFromMaps(maps, "account_id", "accountId", "chatgpt_account_id", "chatgptAccountId"),
+		Email:        firstStringFromMaps(maps, "email", "account_email", "accountEmail"),
+		Plan:         firstStringFromMaps(maps, "plan_type", "planType", "plan"),
 	}
-	if credential.AccessToken == "" {
-		return Credential{}, fmt.Errorf("OAuth 文件缺少 access_token")
+	if credential.AccessToken == "" && credential.RefreshToken == "" {
+		return Credential{}, fmt.Errorf("OAuth 文件缺少 access_token 或 refresh_token；支持 Codex auth.json、CPA 与 Sub2API 导出格式")
+	}
+	if expires := firstValueFromMaps(maps, "expires_at", "expiresAt", "expired", "expiry"); expires != nil {
+		credential.ExpiresAt = parseCredentialTime(expires)
 	}
 	credential.enrichFromJWT()
 	return credential, nil
@@ -207,6 +213,7 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (Credential, 
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	return c.readTokenResponse(req, refreshToken)
 }
 
@@ -218,13 +225,18 @@ func (c *Client) StartDeviceLogin(ctx context.Context) (DeviceChallenge, error) 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return DeviceChallenge{}, fmt.Errorf("启动 Codex 设备登录失败: %w", err)
 	}
 	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return DeviceChallenge{}, fmt.Errorf("读取 Codex 设备登录响应失败: %w", err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return DeviceChallenge{}, fmt.Errorf("Codex 设备登录接口返回 HTTP %d", resp.StatusCode)
+		return DeviceChallenge{}, responseError("Codex 设备登录接口", resp.StatusCode, body)
 	}
 	var value struct {
 		DeviceAuthID string          `json:"device_auth_id"`
@@ -232,7 +244,7 @@ func (c *Client) StartDeviceLogin(ctx context.Context) (DeviceChallenge, error) 
 		UserCodeAlt  string          `json:"usercode"`
 		Interval     json.RawMessage `json:"interval"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&value); err != nil {
+	if err := json.Unmarshal(body, &value); err != nil {
 		return DeviceChallenge{}, fmt.Errorf("解析 Codex 设备登录响应失败: %w", err)
 	}
 	if value.UserCode == "" {
@@ -276,19 +288,24 @@ func (c *Client) pollDevice(ctx context.Context, challenge DeviceChallenge) (dev
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return deviceTokenResponse{}, false, fmt.Errorf("轮询 Codex 设备登录失败: %w", err)
 	}
 	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return deviceTokenResponse{}, false, fmt.Errorf("读取 Codex 设备登录轮询响应失败: %w", err)
+	}
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
 		return deviceTokenResponse{}, true, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return deviceTokenResponse{}, false, fmt.Errorf("Codex 设备登录轮询返回 HTTP %d", resp.StatusCode)
+		return deviceTokenResponse{}, false, responseError("Codex 设备登录轮询", resp.StatusCode, body)
 	}
 	var result deviceTokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return result, false, fmt.Errorf("解析 Codex 设备授权失败: %w", err)
 	}
 	if result.AuthorizationCode == "" || result.CodeVerifier == "" {
@@ -311,6 +328,7 @@ func (c *Client) exchangeDeviceCode(ctx context.Context, result deviceTokenRespo
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	return c.readTokenResponse(req, "")
 }
 
@@ -325,7 +343,7 @@ func (c *Client) readTokenResponse(req *http.Request, fallbackRefresh string) (C
 		return Credential{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Credential{}, fmt.Errorf("Codex 授权刷新失败 HTTP %d", resp.StatusCode)
+		return Credential{}, responseError("Codex 授权刷新", resp.StatusCode, body)
 	}
 	var value struct {
 		AccessToken  string `json:"access_token"`
@@ -410,22 +428,7 @@ func windowLabel(seconds int64, fallback string) string {
 	}
 }
 
-func objectAt(root map[string]any, key string) map[string]any {
-	value, _ := root[key].(map[string]any)
-	return value
-}
-
-func firstString(objects ...any) string {
-	var keys []string
-	var maps []map[string]any
-	for _, item := range objects {
-		switch value := item.(type) {
-		case map[string]any:
-			maps = append(maps, value)
-		case string:
-			keys = append(keys, value)
-		}
-	}
+func firstStringFromMaps(maps []map[string]any, keys ...string) string {
 	for _, object := range maps {
 		for _, key := range keys {
 			if value := strings.TrimSpace(stringValue(object[key])); value != "" {
@@ -434,6 +437,119 @@ func firstString(objects ...any) string {
 		}
 	}
 	return ""
+}
+
+func firstValueFromMaps(maps []map[string]any, keys ...string) any {
+	for _, object := range maps {
+		for _, key := range keys {
+			if value, ok := object[key]; ok && value != nil {
+				return value
+			}
+		}
+	}
+	return nil
+}
+
+func credentialMaps(root any) []map[string]any {
+	const maxDepth = 8
+	priority := map[string]int{
+		"tokens": 0, "token": 1, "oauth": 2, "credential": 3, "credentials": 4,
+		"auth": 5, "auth_json": 6, "authJson": 7, "account": 8, "data": 9,
+	}
+	type candidate struct {
+		value map[string]any
+		rank  int
+		order int
+	}
+	var candidates []candidate
+	var walk func(any, int, int)
+	order := 0
+	walk = func(value any, depth, rank int) {
+		if depth > maxDepth {
+			return
+		}
+		switch item := value.(type) {
+		case map[string]any:
+			candidates = append(candidates, candidate{value: item, rank: rank, order: order})
+			order++
+			keys := make([]string, 0, len(item))
+			for key := range item {
+				keys = append(keys, key)
+			}
+			sort.SliceStable(keys, func(i, j int) bool {
+				left, leftOK := priority[keys[i]]
+				right, rightOK := priority[keys[j]]
+				if leftOK != rightOK {
+					return leftOK
+				}
+				if leftOK && rightOK && left != right {
+					return left < right
+				}
+				return keys[i] < keys[j]
+			})
+			for _, key := range keys {
+				childRank := rank + 20
+				if preferred, ok := priority[key]; ok {
+					childRank = preferred
+				}
+				walk(item[key], depth+1, childRank)
+			}
+		case []any:
+			for _, child := range item {
+				walk(child, depth+1, rank+10)
+			}
+		case string:
+			text := strings.TrimSpace(item)
+			if strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
+				var nested any
+				decoder := json.NewDecoder(strings.NewReader(text))
+				decoder.UseNumber()
+				if decoder.Decode(&nested) == nil {
+					walk(nested, depth+1, rank)
+				}
+			}
+		}
+	}
+	walk(root, 0, 15)
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].rank != candidates[j].rank {
+			return candidates[i].rank < candidates[j].rank
+		}
+		return candidates[i].order < candidates[j].order
+	})
+	result := make([]map[string]any, 0, len(candidates))
+	for _, item := range candidates {
+		result = append(result, item.value)
+	}
+	return result
+}
+
+func parseCredentialTime(value any) time.Time {
+	if epoch, ok := intValue(value); ok && epoch > 0 {
+		if epoch > 10_000_000_000 {
+			epoch /= 1000
+		}
+		return time.Unix(epoch, 0).UTC()
+	}
+	if text, ok := value.(string); ok {
+		for _, layout := range []string{time.RFC3339, time.RFC3339Nano, "2006-01-02 15:04:05"} {
+			if parsed, err := time.Parse(layout, strings.TrimSpace(text)); err == nil {
+				return parsed.UTC()
+			}
+		}
+	}
+	return time.Time{}
+}
+
+func responseError(operation string, status int, body []byte) error {
+	detail := strings.TrimSpace(string(body))
+	if len(detail) > 500 {
+		detail = detail[:500] + "…"
+	}
+	if detail == "" {
+		detail = "响应正文为空"
+	}
+	return fmt.Errorf("%s返回 HTTP %d: %s", operation, status, detail)
 }
 
 func parseJWTClaims(token string) map[string]any {

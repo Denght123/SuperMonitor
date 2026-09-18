@@ -12,6 +12,10 @@ auth-exports/
 auth.json
 *.oauth.json
 oauth-*.json
+*.auth.json
+*.info
+cpa-*.json
+sub2api-*.json
 
 # Runtime data
 data/
@@ -23,6 +27,7 @@ data/
 backups/
 logs/
 diagnostics/
+.tmp/
 
 # Go
 bin/
