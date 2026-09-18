@@ -2,6 +2,27 @@
 
 All notable changes to SuperMonitor are documented here.
 
+## [0.5.0] - 2026-09-19
+
+### Added
+
+- Dedicated Zhipu API-key adapter for native five-hour and weekly quota windows.
+- Dedicated Claude Code and Gemini CLI OAuth credential-file imports.
+- Dedicated TokenRhythm browser-session adapter for CNY balance, usage, and expiry fields.
+- Official TokenRhythm brand mark and strict separation from Xiaomi MiMo.
+
+### Fixed
+
+- WorkBuddy cards now display real remaining credits such as `2100 credits`; percentages are used only to fill progress bars.
+- Balance providers display CNY amounts, while Codex-style rate windows retain percentage values.
+- Codex CPA/Sub2API imports select one coherent account record instead of mixing sibling tokens and metadata.
+- Codex authorization errors no longer trap the connection dialog; close, backdrop, and Escape always work.
+
+### Changed
+
+- Replaced the generic endpoint and JSON-path form with dedicated OAuth, file, API-key, Cookie, or session-token onboarding.
+- Unverified providers are clearly marked as being researched and cannot create misleading pseudo-connections.
+
 ## [0.4.0] - 2026-09-18
 
 ### Added

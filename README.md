@@ -2,7 +2,7 @@
 
 SuperMonitor is an open-source, self-hosted control plane for monitoring AI and coding-agent quotas, credits, balances, refresh windows, and usage history.
 
-> Current status: **v0.4 provider protocol overhaul**. Codex, WorkBuddy / CodeBuddy CN and Global, DeepSeek, and Xiaomi MiMo have built-in live adapters. Every catalog platform can also connect through a verified custom quota endpoint mapping; an account is saved only after the endpoint authenticates and returns a valid live value.
+> Current status: **v0.5 native provider connections**. Codex, WorkBuddy / CodeBuddy CN and Global, DeepSeek, Xiaomi MiMo, TokenRhythm, Zhipu, Gemini CLI, and Claude Code have dedicated live adapters. Platforms whose native protocol is not yet verified remain visibly disabled instead of exposing a generic field-mapping form.
 
 ## Principles
 
@@ -18,7 +18,11 @@ SuperMonitor is an open-source, self-hosted control plane for monitoring AI and 
 - WorkBuddy / CodeBuddy Global: import a credential file or use official QR OAuth, then read the international legacy billing endpoint.
 - DeepSeek: enter an API key to read the official account balance.
 - Xiaomi MiMo: paste the authenticated console Cookie to read Token Plan usage and reset time.
-- TRAE, Qoder, Coze, Bailian, Zhipu, Gemini, Claude Code, Kiro, and Cursor: configure the platform's real quota URL, authentication header/Cookie, and JSON field paths. SuperMonitor validates the live response before persisting the account.
+- TokenRhythm / 基元律动: paste a `sess_` browser session token or `tr_session` Cookie to read the CNY balance and expiry time from `tokenrhythm.studio`; it is a separate provider from Xiaomi MiMo.
+- Zhipu: enter an API key to read native five-hour and weekly Coding Plan windows, preserving credits versus percentage semantics.
+- Gemini CLI: import `oauth_creds.json` to read Code Assist model quota buckets. For unattended refresh after the access token expires, provide the deployment's own `SUPMON_GEMINI_OAUTH_CLIENT_ID` and `SUPMON_GEMINI_OAUTH_CLIENT_SECRET` environment variables.
+- Claude Code: import `.credentials.json` to read five-hour, weekly, and model-specific OAuth usage windows.
+- TRAE, Qoder, Coze, Bailian, Kiro, and Cursor remain disabled until their dedicated authentication and quota contracts are verified.
 - Store every credential with AES-GCM using a random key created in `SUPMON_DATA_DIR`.
 
 On Windows, outbound provider clients honor proxy environment variables first and then the current user's Internet Settings proxy. This keeps the service on the same route as the browser for region-sensitive OAuth endpoints.

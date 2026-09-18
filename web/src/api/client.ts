@@ -7,24 +7,6 @@ export type QuotaSignal = components['schemas']['QuotaSignal']
 export type Provider = components['schemas']['Provider']
 export type DeviceLoginSession = components['schemas']['DeviceLoginSession']
 
-export type CustomQuotaConnection = {
-  alias: string
-  endpoint: string
-  method: 'GET' | 'POST'
-  authType: 'bearer' | 'header' | 'cookie' | 'none'
-  headerName?: string
-  headerPrefix?: string
-  secret?: string
-  requestBody?: string
-  valuePath: string
-  totalPath?: string
-  resetAtPath?: string
-  expiresAtPath?: string
-  label: string
-  unit: string
-  kind: string
-}
-
 type APIErrorShape = {
   error?: {
     code?: string
@@ -77,11 +59,6 @@ export const api = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ alias: alias.trim(), secret }),
-  }),
-  connectCustomQuota: (providerId: string, payload: CustomQuotaConnection) => request<AccountSummary>(`/providers/${encodeURIComponent(providerId)}/accounts/custom`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
   }),
   startCodexDeviceLogin: (alias: string) => request<DeviceLoginSession>('/providers/codex/device-login', {
     method: 'POST',

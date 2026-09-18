@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -24,7 +23,7 @@ const (
 	deviceVerificationURL = "https://auth.openai.com/codex/device"
 	deviceRedirectURI     = "https://auth.openai.com/deviceauth/callback"
 	usageURL              = "https://chatgpt.com/backend-api/wham/usage"
-	userAgent             = "codex_cli_rs/0.154.0 (Windows; x86_64) SuperMonitor/0.4.0"
+	userAgent             = "codex-cli/0.154.0 SuperMonitor/0.5.0"
 )
 
 type Client struct {
@@ -83,22 +82,17 @@ func ParseCredential(raw []byte) (Credential, error) {
 	if err := decoder.Decode(&root); err != nil {
 		return Credential{}, fmt.Errorf("OAuth 文件不是有效 JSON: %w", err)
 	}
-	maps := credentialMaps(root)
-	credential := Credential{
-		AccessToken:  firstStringFromMaps(maps, "access_token", "accessToken", "access", "token"),
-		RefreshToken: firstStringFromMaps(maps, "refresh_token", "refreshToken", "refresh"),
-		IDToken:      firstStringFromMaps(maps, "id_token", "idToken"),
-		AccountID:    firstStringFromMaps(maps, "account_id", "accountId", "chatgpt_account_id", "chatgptAccountId"),
-		Email:        firstStringFromMaps(maps, "email", "account_email", "accountEmail"),
-		Plan:         firstStringFromMaps(maps, "plan_type", "planType", "plan"),
-	}
+	credential, expires := selectCredential(root)
 	if credential.AccessToken == "" && credential.RefreshToken == "" {
 		return Credential{}, fmt.Errorf("OAuth 文件缺少 access_token 或 refresh_token；支持 Codex auth.json、CPA 与 Sub2API 导出格式")
 	}
-	if expires := firstValueFromMaps(maps, "expires_at", "expiresAt", "expired", "expiry"); expires != nil {
+	if expires != nil {
 		credential.ExpiresAt = parseCredentialTime(expires)
 	}
 	credential.enrichFromJWT()
+	if accountID := accountIDFromJWT(credential.IDToken, credential.AccessToken); accountID != "" {
+		credential.AccountID = accountID
+	}
 	return credential, nil
 }
 
@@ -126,10 +120,10 @@ func (c *Credential) enrichFromJWT() {
 				c.Plan = stringClaim(claims, "chatgpt_plan_type")
 			}
 		}
-		if c.ExpiresAt.IsZero() {
-			if exp, ok := numberClaim(claims, "exp"); ok {
-				c.ExpiresAt = time.Unix(exp, 0).UTC()
-			}
+	}
+	if claims := parseJWTClaims(c.AccessToken); claims != nil {
+		if exp, ok := numberClaim(claims, "exp"); ok {
+			c.ExpiresAt = time.Unix(exp, 0).UTC()
 		}
 	}
 }
@@ -147,7 +141,7 @@ func (c *Client) FetchUsage(ctx context.Context, credential *Credential) (Usage,
 	}
 	refreshed, refreshErr := c.Refresh(ctx, credential.RefreshToken)
 	if refreshErr != nil {
-		return Usage{}, false, refreshErr
+		return Usage{}, false, fmt.Errorf("Codex access_token 已被额度接口拒绝（%s）；refresh_token 也无法刷新，请使用设备登录重新授权。刷新详情: %s", compactError(err), compactError(refreshErr))
 	}
 	if refreshed.Email == "" {
 		refreshed.Email = credential.Email
@@ -188,7 +182,7 @@ func (c *Client) fetchUsage(ctx context.Context, credential *Credential) (Usage,
 		return Usage{}, resp.StatusCode, fmt.Errorf("读取 Codex 额度响应失败: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Usage{}, resp.StatusCode, fmt.Errorf("Codex 额度接口返回 HTTP %d", resp.StatusCode)
+		return Usage{}, resp.StatusCode, responseError("Codex 额度接口", resp.StatusCode, body)
 	}
 	usage, err := parseUsage(body)
 	if err != nil {
@@ -428,7 +422,120 @@ func windowLabel(seconds int64, fallback string) string {
 	}
 }
 
-func firstStringFromMaps(maps []map[string]any, keys ...string) string {
+type credentialCandidate struct {
+	credential Credential
+	expires    any
+	score      int
+	order      int
+}
+
+func selectCredential(root any) (Credential, any) {
+	var candidates []credentialCandidate
+	order := 0
+	var walk func(any, []map[string]any, int)
+	walk = func(value any, ancestors []map[string]any, depth int) {
+		if depth > 10 {
+			return
+		}
+		switch item := value.(type) {
+		case map[string]any:
+			if hasCredentialToken(item) {
+				maps := credentialContextMaps(item, ancestors)
+				credential := Credential{
+					AccessToken:  firstStringInMaps(maps, "access_token", "accessToken", "access"),
+					RefreshToken: firstStringInMaps(maps, "refresh_token", "refreshToken", "refresh"),
+					IDToken:      firstStringInMaps(maps, "id_token", "idToken"),
+					AccountID:    firstStringInMaps(maps, "account_id", "accountId", "chatgpt_account_id", "chatgptAccountId"),
+					Email:        firstStringInMaps(maps, "email", "account_email", "accountEmail"),
+					Plan:         firstStringInMaps(maps, "plan_type", "planType", "plan"),
+				}
+				score := credentialScore(item, ancestors, credential)
+				candidates = append(candidates, credentialCandidate{credential: credential, expires: firstValueInMaps(maps, "expires_at", "expiresAt", "expired", "expiry"), score: score, order: order})
+				order++
+			}
+			nextAncestors := append(append([]map[string]any{}, ancestors...), item)
+			for _, child := range item {
+				walk(child, nextAncestors, depth+1)
+			}
+		case []any:
+			for _, child := range item {
+				walk(child, ancestors, depth+1)
+			}
+		case string:
+			text := strings.TrimSpace(item)
+			if strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
+				var nested any
+				decoder := json.NewDecoder(strings.NewReader(text))
+				decoder.UseNumber()
+				if decoder.Decode(&nested) == nil {
+					walk(nested, ancestors, depth+1)
+				}
+			}
+		}
+	}
+	walk(root, nil, 0)
+	if len(candidates) == 0 {
+		return Credential{}, nil
+	}
+	best := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if candidate.score > best.score || candidate.score == best.score && candidate.order < best.order {
+			best = candidate
+		}
+	}
+	return best.credential, best.expires
+}
+
+func hasCredentialToken(object map[string]any) bool {
+	return firstStringInMaps([]map[string]any{object}, "access_token", "accessToken", "access", "refresh_token", "refreshToken", "refresh") != ""
+}
+
+func credentialContextMaps(object map[string]any, ancestors []map[string]any) []map[string]any {
+	maps := []map[string]any{object}
+	for _, ancestor := range reverseMaps(ancestors) {
+		maps = append(maps, ancestor)
+		// Sub2API commonly stores account metadata beside a credentials/auth_json
+		// wrapper. Only inspect explicitly metadata-shaped siblings so tokens from
+		// another account record can never be combined with this candidate.
+		for _, key := range []string{"account", "profile", "user"} {
+			if metadata, ok := ancestor[key].(map[string]any); ok {
+				maps = append(maps, metadata)
+			}
+		}
+	}
+	return maps
+}
+
+func credentialScore(object map[string]any, ancestors []map[string]any, credential Credential) int {
+	score := 0
+	provider := strings.ToLower(firstStringInMaps(append([]map[string]any{object}, reverseMaps(ancestors)...), "type", "provider", "provider_id", "providerId"))
+	if provider == "codex" || strings.Contains(provider, "openai") {
+		score += 100
+	}
+	if credential.AccessToken != "" {
+		score += 40
+	}
+	if parseJWTClaims(credential.AccessToken) != nil {
+		score += 20
+	}
+	if credential.RefreshToken != "" {
+		score += 10
+	}
+	if credential.AccountID != "" || accountIDFromJWT(credential.IDToken, credential.AccessToken) != "" {
+		score += 8
+	}
+	return score
+}
+
+func reverseMaps(values []map[string]any) []map[string]any {
+	result := make([]map[string]any, 0, len(values))
+	for index := len(values) - 1; index >= 0; index-- {
+		result = append(result, values[index])
+	}
+	return result
+}
+
+func firstStringInMaps(maps []map[string]any, keys ...string) string {
 	for _, object := range maps {
 		for _, key := range keys {
 			if value := strings.TrimSpace(stringValue(object[key])); value != "" {
@@ -439,7 +546,7 @@ func firstStringFromMaps(maps []map[string]any, keys ...string) string {
 	return ""
 }
 
-func firstValueFromMaps(maps []map[string]any, keys ...string) any {
+func firstValueInMaps(maps []map[string]any, keys ...string) any {
 	for _, object := range maps {
 		for _, key := range keys {
 			if value, ok := object[key]; ok && value != nil {
@@ -450,78 +557,31 @@ func firstValueFromMaps(maps []map[string]any, keys ...string) any {
 	return nil
 }
 
-func credentialMaps(root any) []map[string]any {
-	const maxDepth = 8
-	priority := map[string]int{
-		"tokens": 0, "token": 1, "oauth": 2, "credential": 3, "credentials": 4,
-		"auth": 5, "auth_json": 6, "authJson": 7, "account": 8, "data": 9,
-	}
-	type candidate struct {
-		value map[string]any
-		rank  int
-		order int
-	}
-	var candidates []candidate
-	var walk func(any, int, int)
-	order := 0
-	walk = func(value any, depth, rank int) {
-		if depth > maxDepth {
-			return
+func accountIDFromJWT(tokens ...string) string {
+	for _, token := range tokens {
+		claims := parseJWTClaims(token)
+		if claims == nil {
+			continue
 		}
-		switch item := value.(type) {
-		case map[string]any:
-			candidates = append(candidates, candidate{value: item, rank: rank, order: order})
-			order++
-			keys := make([]string, 0, len(item))
-			for key := range item {
-				keys = append(keys, key)
-			}
-			sort.SliceStable(keys, func(i, j int) bool {
-				left, leftOK := priority[keys[i]]
-				right, rightOK := priority[keys[j]]
-				if leftOK != rightOK {
-					return leftOK
-				}
-				if leftOK && rightOK && left != right {
-					return left < right
-				}
-				return keys[i] < keys[j]
-			})
-			for _, key := range keys {
-				childRank := rank + 20
-				if preferred, ok := priority[key]; ok {
-					childRank = preferred
-				}
-				walk(item[key], depth+1, childRank)
-			}
-		case []any:
-			for _, child := range item {
-				walk(child, depth+1, rank+10)
-			}
-		case string:
-			text := strings.TrimSpace(item)
-			if strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
-				var nested any
-				decoder := json.NewDecoder(strings.NewReader(text))
-				decoder.UseNumber()
-				if decoder.Decode(&nested) == nil {
-					walk(nested, depth+1, rank)
-				}
-			}
+		if value := nestedStringClaim(claims, "https://api.openai.com/auth", "chatgpt_account_id"); value != "" {
+			return value
+		}
+		if value := stringClaim(claims, "chatgpt_account_id"); value != "" {
+			return value
 		}
 	}
-	walk(root, 0, 15)
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].rank != candidates[j].rank {
-			return candidates[i].rank < candidates[j].rank
-		}
-		return candidates[i].order < candidates[j].order
-	})
-	result := make([]map[string]any, 0, len(candidates))
-	for _, item := range candidates {
-		result = append(result, item.value)
+	return ""
+}
+
+func compactError(err error) string {
+	if err == nil {
+		return "未知错误"
 	}
-	return result
+	text := strings.Join(strings.Fields(err.Error()), " ")
+	if len(text) > 260 {
+		return text[:260] + "…"
+	}
+	return text
 }
 
 func parseCredentialTime(value any) time.Time {

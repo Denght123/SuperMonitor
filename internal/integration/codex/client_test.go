@@ -69,6 +69,33 @@ func TestParseCredentialSupportsArrayAndCamelCase(t *testing.T) {
 	}
 }
 
+func TestParseCredentialKeepsTokensFromOneCPARecord(t *testing.T) {
+	firstPayload := base64.RawURLEncoding.EncodeToString([]byte(`{"exp":100,"https://api.openai.com/auth":{"chatgpt_account_id":"acct-old"}}`))
+	secondPayload := base64.RawURLEncoding.EncodeToString([]byte(`{"exp":1999999999,"https://api.openai.com/auth":{"chatgpt_account_id":"acct-current"},"email":"current@example.com"}`))
+	oldJWT := fmt.Sprintf("header.%s.signature", firstPayload)
+	currentJWT := fmt.Sprintf("header.%s.signature", secondPayload)
+	raw := []byte(fmt.Sprintf(`[{"provider":"other","access_token":%q,"refresh_token":"old-refresh","account_id":"wrong"},{"provider":"codex","tokens":{"access_token":%q,"refresh_token":"current-refresh"}}]`, oldJWT, currentJWT))
+	credential, err := ParseCredential(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.AccessToken != currentJWT || credential.RefreshToken != "current-refresh" || credential.AccountID != "acct-current" || credential.Email != "current@example.com" {
+		t.Fatalf("mixed credential records: %+v", credential)
+	}
+}
+
+func TestParseCredentialJWTExpiryOverridesStaleExportExpiry(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"exp":1999999999}`))
+	jwt := fmt.Sprintf("header.%s.signature", payload)
+	credential, err := ParseCredential([]byte(fmt.Sprintf(`{"type":"codex","access_token":%q,"expired":"2020-01-01T00:00:00Z"}`, jwt)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.ExpiresAt.Unix() != 1999999999 {
+		t.Fatalf("expected JWT expiry, got %v", credential.ExpiresAt)
+	}
+}
+
 func TestParseCredentialAllowsRefreshOnly(t *testing.T) {
 	credential, err := ParseCredential([]byte(`{"credentials":{"refresh_token":"rt-only"}}`))
 	if err != nil {

@@ -78,7 +78,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.4.0</small></div>
+        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.5.0</small></div>
       </aside>
 
       <main className="main-stage">
@@ -161,10 +161,12 @@ function QuotaProgress({ signal }: { signal: QuotaSignal }) {
   const percent = signal.remainingPercent ?? (signal.total ? signal.value / signal.total * 100 : undefined)
   const tone = percent === undefined ? signal.status : percent <= 15 ? 'critical' : percent <= 35 ? 'warning' : 'healthy'
   const deadline = signal.resetAt ?? signal.expiresAt
+  const displayValue = signal.kind === 'rate_window' && percent !== undefined ? `${Math.round(percent)}%` : quotaValue(signal.value, signal.unit)
+  const ratio = signal.total ? `${quotaValue(signal.value, signal.unit)} / ${quotaValue(signal.total, signal.unit)}` : signal.source
   return <article className={`quota-progress tone-${tone}`}>
-    <div className="quota-progress-head"><div><span>{signal.provider}</span><strong>{signal.label}</strong></div><b>{percent === undefined ? quotaValue(signal.value, signal.unit) : `${Math.round(percent)}%`}</b></div>
+    <div className="quota-progress-head"><div><span>{signal.provider}</span><strong>{signal.label}</strong></div><b>{displayValue}</b></div>
     {percent !== undefined ? <div className="progress-track" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}><span style={{ transform: `scaleX(${Math.max(1, Math.min(100, percent)) / 100})` }} /></div> : null}
-    <div className="quota-meta"><span>{signal.source}</span>{deadline ? <span><Clock3 size={15} />{signal.resetAt ? '重置' : '到期'}：{formatDateTime(deadline)}（{relativeTime(deadline)}）</span> : <span>长期有效</span>}</div>
+    <div className="quota-meta"><span>{ratio}</span>{deadline ? <span><Clock3 size={15} />{signal.resetAt ? '重置' : '到期'}：{formatDateTime(deadline)}（{relativeTime(deadline)}）</span> : <span>长期有效</span>}</div>
   </article>
 }
 
@@ -198,7 +200,7 @@ function AccountsPage({ accounts, onSelectAccount, onReload }: { accounts: Accou
   const groups = ['国内平台', '国际平台']
   return <>
     <section className="section-block"><div className="section-header"><div><h2>已连接账号</h2><p>按应用归类 · {accounts.length} 个真实账号</p></div></div><ProviderAccountSections accounts={accounts} onSelectAccount={onSelectAccount} /></section>
-    <section className="section-block provider-section"><div className="section-header"><div><h2>添加平台账号</h2><p>每个平台独立添加；必须实际联通并解析额度后才会写入账号池。</p></div><label className="provider-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索平台" /></label></div>{groups.map((group) => <div key={group} className="provider-group"><h3>{group}</h3><div className="provider-grid">{filtered.filter((provider) => provider.category === group).map((provider) => <article className="provider-card" key={provider.id}><div className="provider-card-top"><ProviderLogo providerId={provider.id} name={provider.name} /><span className="adapter-state live">可连接</span></div><h4>{provider.name}</h4><p>{provider.description}</p><div className="capability-row">{provider.capabilities.slice(0, 3).map((capability) => <span key={capability}>{capabilityLabel(capability)}</span>)}</div><button className="provider-action active" onClick={() => setSelected(provider)}><Plus size={17} />添加账号</button></article>)}</div></div>)}</section>
+    <section className="section-block provider-section"><div className="section-header"><div><h2>添加平台账号</h2><p>每个平台独立添加；只有专属认证与真实额度字段完成验证后才开放连接。</p></div><label className="provider-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索平台" /></label></div>{groups.map((group) => <div key={group} className="provider-group"><h3>{group}</h3><div className="provider-grid">{filtered.filter((provider) => provider.category === group).map((provider) => <article className={`provider-card ${provider.liveAuth ? '' : 'is-researching'}`} key={provider.id}><div className="provider-card-top"><ProviderLogo providerId={provider.id} name={provider.name} /><span className={`adapter-state ${provider.liveAuth ? 'live' : 'pending'}`}>{provider.liveAuth ? '可连接' : '接入验证中'}</span></div><h4>{provider.name}</h4><p>{provider.description}</p><div className="capability-row">{provider.capabilities.slice(0, 3).map((capability) => <span key={capability}>{capabilityLabel(capability)}</span>)}</div><button className={provider.liveAuth ? 'provider-action active' : 'provider-action'} onClick={() => provider.liveAuth && setSelected(provider)} disabled={!provider.liveAuth}>{provider.liveAuth ? <><Plus size={17} />添加账号</> : '专属接入尚未开放'}</button></article>)}</div></div>)}</section>
     {selected ? <ProviderConnectDialog provider={selected} onClose={() => setSelected(null)} onConnected={() => { setSelected(null); onReload() }} /> : null}
   </>
 }
@@ -207,26 +209,19 @@ function ProviderConnectDialog({ provider, onClose, onConnected }: { provider: P
   const [alias, setAlias] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [secret, setSecret] = useState('')
-  const [endpoint, setEndpoint] = useState('')
-  const [method, setMethod] = useState<'GET' | 'POST'>('GET')
-  const [authType, setAuthType] = useState<'bearer' | 'header' | 'cookie' | 'none'>('bearer')
-  const [headerName, setHeaderName] = useState('Authorization')
-  const [headerPrefix, setHeaderPrefix] = useState('')
-  const [requestBody, setRequestBody] = useState('')
-  const [valuePath, setValuePath] = useState('data.remaining')
-  const [totalPath, setTotalPath] = useState('')
-  const [resetAtPath, setResetAtPath] = useState('')
-  const [expiresAtPath, setExpiresAtPath] = useState('')
-  const [quotaLabel, setQuotaLabel] = useState('剩余额度')
-  const [unit, setUnit] = useState('credits')
-  const [kind, setKind] = useState('quota')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [session, setSession] = useState<DeviceLoginSession | null>(null)
   const isCodex = provider.id === 'codex'
   const isWorkBuddy = provider.id === 'workbuddy-cn' || provider.id === 'workbuddy-global'
-  const isSecret = provider.id === 'deepseek' || provider.id === 'mimo'
-  const isCustom = !isCodex && !isWorkBuddy && !isSecret
+  const isFileImport = isCodex || isWorkBuddy || provider.id === 'claude-code' || provider.id === 'gemini-cli'
+  const isSecret = ['deepseek', 'mimo', 'zhipu', 'tokenrhythm'].includes(provider.id)
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', listener)
+    return () => window.removeEventListener('keydown', listener)
+  }, [onClose])
 
   useEffect(() => {
     if (!session || session.status !== 'pending') return
@@ -251,45 +246,51 @@ function ProviderConnectDialog({ provider, onClose, onConnected }: { provider: P
     try {
       const next = isCodex ? await api.startCodexDeviceLogin(alias) : await api.startProviderOAuth(provider.id, alias)
       setSession(next)
+      setBusy(false)
       if (isCodex) window.open(next.verifyUrl, '_blank', 'noopener,noreferrer')
     } catch (reason) { setError(reason instanceof Error ? reason.message : '无法启动登录'); setBusy(false) }
   }
   const connectSecret = async () => {
-    if (!secret.trim()) { setError(provider.id === 'deepseek' ? '请输入 DeepSeek API Key' : '请粘贴 MiMo 控制台 Cookie'); return }
+    if (!secret.trim()) { setError(secretConfig(provider.id).emptyError); return }
     setBusy(true); setError('')
     try { await api.connectSecret(provider.id, alias, secret); setSecret(''); onConnected() } catch (reason) { setSecret(''); setError(reason instanceof Error ? reason.message : '连接失败'); setBusy(false) }
   }
-  const connectCustom = async () => {
-    if (!endpoint.trim() || !valuePath.trim()) { setError('请填写额度接口 URL 和剩余额度字段路径'); return }
-    if (authType !== 'none' && !secret.trim()) { setError('请填写该接口需要的认证内容'); return }
-    setBusy(true); setError('')
-    try {
-      await api.connectCustomQuota(provider.id, {
-        alias: alias.trim(), endpoint: endpoint.trim(), method, authType,
-        headerName: authType === 'header' ? headerName.trim() : undefined,
-        headerPrefix: authType === 'header' ? headerPrefix : undefined,
-        secret: authType === 'none' ? undefined : secret,
-        requestBody: method === 'POST' ? requestBody.trim() : undefined,
-        valuePath: valuePath.trim(), totalPath: totalPath.trim() || undefined,
-        resetAtPath: resetAtPath.trim() || undefined, expiresAtPath: expiresAtPath.trim() || undefined,
-        label: quotaLabel.trim() || '剩余额度', unit: unit.trim() || 'credits', kind: kind.trim() || 'quota',
-      })
-      setSecret(''); onConnected()
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '接口验证失败'); setBusy(false) }
-  }
+  const fileCopy = credentialFileCopy(provider.id)
+  const secretCopy = secretConfig(provider.id)
 
-  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose() }}>
+  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
     <section className="connect-dialog" role="dialog" aria-modal="true" aria-labelledby="connect-title">
-      <header><div className="connect-title-row"><ProviderLogo providerId={provider.id} name={provider.name} size={30} /><div><span className="adapter-state live">真实连接</span><h2 id="connect-title">连接 {provider.name}</h2><p>{provider.description}</p></div></div><button className="close-button" onClick={onClose} disabled={busy}><X size={20} /></button></header>
+      <header><div className="connect-title-row"><ProviderLogo providerId={provider.id} name={provider.name} size={30} /><div><span className="adapter-state live">真实连接</span><h2 id="connect-title">连接 {provider.name}</h2><p>{provider.description}</p></div></div><button className="close-button" onClick={onClose} aria-label="关闭连接窗口"><X size={20} /></button></header>
       {session ? <div className="device-panel"><div className="qr-shell"><QRCodeSVG value={session.verifyUrl} size={180} bgColor="transparent" fgColor="currentColor" /></div><div><span className="field-label">{isCodex ? 'OpenAI 官方设备验证码' : '官方扫码登录'}</span>{session.userCode ? <strong className="device-code">{session.userCode}</strong> : null}<p>{isCodex ? '扫描二维码或打开官方页面，输入验证码完成登录。' : '用手机扫描左侧二维码，在 WorkBuddy / CodeBuddy 官方页面完成授权。'} 页面会自动检测结果并读取真实额度。</p><a className="primary-button" href={session.verifyUrl} target="_blank" rel="noreferrer">打开官方登录页 <ExternalLink size={17} /></a><span className="login-status"><LoaderCircle className={session.status === 'pending' ? 'spin' : ''} size={17} />{session.message}</span>{error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}</div></div> : <div className="connect-body">
         <label><span className="field-label">账号备注（可选）</span><input value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="例如：工作账号" /></label>
-        {(isCodex || isWorkBuddy) ? <><div className="auth-method"><div><FileJson size={22} /><span><strong>导入认证文件</strong><small>{isCodex ? '支持 Codex auth.json、CPA 与 Sub2API 常见导出结构' : '支持 WorkBuddy / CodeBuddy 导出的 .info 或 JSON 凭据'}</small></span></div><label className="file-picker"><Upload size={17} />{file ? file.name : '选择认证文件'}<input type="file" accept={isCodex ? 'application/json,.json' : 'application/json,.json,.info'} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label><button className="primary-button" onClick={() => void importFile()} disabled={busy || !file}>{busy ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}导入并读取额度</button></div><div className="method-divider"><span>或</span></div><div className="auth-method device"><div><Globe2 size={22} /><span><strong>{isCodex ? 'OpenAI 官方设备登录' : '官方二维码登录'}</strong><small>授权完成后自动写入本机保险箱并读取实时额度</small></span></div><button className="secondary-button" onClick={() => void startOAuth()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <ExternalLink size={17} />}{isCodex ? '获取登录验证码' : '生成登录二维码'}</button></div></> : null}
-        {isSecret ? <div className="auth-method"><div><KeyRound size={22} /><span><strong>{provider.id === 'deepseek' ? 'DeepSeek API Key' : 'MiMo 控制台 Cookie'}</strong><small>{provider.id === 'deepseek' ? '调用官方 /user/balance 接口读取账户余额' : '读取 Token Plan 月度额度与周期'}</small></span></div>{provider.id === 'deepseek' ? <input className="secret-input" type="password" autoComplete="off" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="sk-..." /> : <textarea className="secret-textarea" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="在 platform.xiaomimimo.com 登录后，从浏览器请求头复制 Cookie" rows={5} />}<button className="primary-button" onClick={() => void connectSecret()} disabled={busy || !secret.trim()}>{busy ? <LoaderCircle className="spin" size={17} /> : <KeyRound size={17} />}验证并读取额度</button></div> : null}
-        {isCustom ? <div className="auth-method custom-endpoint"><div><Globe2 size={22} /><span><strong>真实额度接口</strong><small>填写该平台的实际接口与 JSON 字段映射；联通、鉴权和字段解析全部成功后才保存。</small></span></div><div className="form-grid"><label className="field-span-2"><span className="field-label">额度接口 URL</span><input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://example.com/api/quota" /></label><label><span className="field-label">请求方式</span><select value={method} onChange={(event) => setMethod(event.target.value as 'GET' | 'POST')}><option>GET</option><option>POST</option></select></label><label><span className="field-label">认证方式</span><select value={authType} onChange={(event) => setAuthType(event.target.value as typeof authType)}><option value="bearer">Bearer Token</option><option value="header">自定义 Header</option><option value="cookie">Cookie</option><option value="none">无需认证</option></select></label>{authType === 'header' ? <><label><span className="field-label">Header 名称</span><input value={headerName} onChange={(event) => setHeaderName(event.target.value)} placeholder="X-API-Key" /></label><label><span className="field-label">值前缀（可空）</span><input value={headerPrefix} onChange={(event) => setHeaderPrefix(event.target.value)} placeholder="Bearer " /></label></> : null}{authType !== 'none' ? <label className="field-span-2"><span className="field-label">认证内容</span><input type="password" autoComplete="off" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={authType === 'cookie' ? 'name=value; ...' : 'Token / API Key'} /></label> : null}{method === 'POST' ? <label className="field-span-2"><span className="field-label">JSON 请求体（可空）</span><textarea value={requestBody} onChange={(event) => setRequestBody(event.target.value)} placeholder="{}" rows={3} /></label> : null}<label><span className="field-label">剩余额度路径</span><input value={valuePath} onChange={(event) => setValuePath(event.target.value)} placeholder="data.remaining" /></label><label><span className="field-label">总额度路径（可空）</span><input value={totalPath} onChange={(event) => setTotalPath(event.target.value)} placeholder="data.total" /></label><label><span className="field-label">重置时间路径（可空）</span><input value={resetAtPath} onChange={(event) => setResetAtPath(event.target.value)} placeholder="data.reset_at" /></label><label><span className="field-label">到期时间路径（可空）</span><input value={expiresAtPath} onChange={(event) => setExpiresAtPath(event.target.value)} placeholder="data.expires_at" /></label><label><span className="field-label">额度名称</span><input value={quotaLabel} onChange={(event) => setQuotaLabel(event.target.value)} /></label><label><span className="field-label">单位</span><input value={unit} onChange={(event) => setUnit(event.target.value)} placeholder="credits / CNY / tokens" /></label><label className="field-span-2"><span className="field-label">类型</span><select value={kind} onChange={(event) => setKind(event.target.value)}><option value="quota">额度</option><option value="credits">积分</option><option value="balance">余额</option><option value="token_plan">Token Plan</option><option value="rate_window">限额窗口</option></select></label></div><button className="primary-button" onClick={() => void connectCustom()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <Globe2 size={17} />}联通、验证并添加</button></div> : null}
+        {isFileImport ? <div className="auth-method"><div><FileJson size={22} /><span><strong>{fileCopy.title}</strong><small>{fileCopy.detail}</small></span></div><label className="file-picker"><Upload size={17} />{file ? file.name : '选择认证文件'}<input type="file" accept={fileCopy.accept} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label><button className="primary-button" onClick={() => void importFile()} disabled={busy || !file}>{busy ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}导入并读取真实额度</button></div> : null}
+        {(isCodex || isWorkBuddy) ? <><div className="method-divider"><span>或</span></div><div className="auth-method device"><div><Globe2 size={22} /><span><strong>{isCodex ? 'OpenAI 官方设备登录' : '官方二维码登录'}</strong><small>授权完成后自动写入本机保险箱并读取实时额度</small></span></div><button className="secondary-button" onClick={() => void startOAuth()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <ExternalLink size={17} />}{isCodex ? '获取登录验证码' : '生成登录二维码'}</button></div></> : null}
+        {isSecret ? <div className="auth-method"><div><KeyRound size={22} /><span><strong>{secretCopy.title}</strong><small>{secretCopy.detail}</small></span></div>{secretCopy.multiline ? <textarea className="secret-textarea" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={secretCopy.placeholder} rows={5} /> : <input className="secret-input" type="password" autoComplete="off" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={secretCopy.placeholder} />}<button className="primary-button" onClick={() => void connectSecret()} disabled={busy || !secret.trim()}>{busy ? <LoaderCircle className="spin" size={17} /> : <KeyRound size={17} />}{secretCopy.action}</button></div> : null}
         {error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}<p className="security-copy"><ShieldCheck size={17} />认证内容只发送到本机后端，并使用 AES-GCM 加密保存；页面不会回显 token、API Key 或 Cookie。</p>
       </div>}
     </section>
   </div>
+}
+
+function credentialFileCopy(providerId: string) {
+  const copies: Record<string, { title: string; detail: string; accept: string }> = {
+    codex: { title: '导入 Codex 认证文件', detail: '支持 auth.json、CPA 扁平格式与 Sub2API 常见包装结构；同一账号的 token 不会交叉混用。', accept: 'application/json,.json' },
+    'workbuddy-cn': { title: '导入 WorkBuddy / CodeBuddy 凭据', detail: '支持官方工具或 WorkBuddy Switch 导出的 .info / JSON 文件。', accept: 'application/json,.json,.info' },
+    'workbuddy-global': { title: '导入 WorkBuddy 国际版凭据', detail: '支持 WorkBuddy Switch 导出的 .info / JSON 文件。', accept: 'application/json,.json,.info' },
+    'claude-code': { title: '导入 Claude Code OAuth 凭据', detail: '选择 Claude Code 的 .credentials.json，自动读取 5 小时与周限额。', accept: 'application/json,.json' },
+    'gemini-cli': { title: '导入 Gemini CLI OAuth 凭据', detail: '选择 Gemini CLI 的 oauth_creds.json 读取各模型额度；过期后可重新导入，或在部署端配置 OAuth 客户端参数自动刷新。', accept: 'application/json,.json' },
+  }
+  return copies[providerId] ?? { title: '导入认证文件', detail: '导入该平台的本地认证文件。', accept: 'application/json,.json' }
+}
+
+function secretConfig(providerId: string) {
+  const copies: Record<string, { title: string; detail: string; placeholder: string; action: string; emptyError: string; multiline?: boolean }> = {
+    deepseek: { title: 'DeepSeek API Key', detail: '调用官方 /user/balance 接口读取人民币账户余额。', placeholder: 'sk-...', action: '验证并读取余额', emptyError: '请输入 DeepSeek API Key' },
+    zhipu: { title: '智谱开放平台 API Key', detail: '自动调用 Coding Plan 额度接口，按真实字段展示积分或限额窗口。', placeholder: '粘贴 open.bigmodel.cn API Key', action: '验证并读取额度', emptyError: '请输入智谱 API Key' },
+    mimo: { title: '小米 MiMo 控制台 Cookie', detail: '仅用于读取小米 MiMo Token Plan；与基元律动完全独立。', placeholder: '在 platform.xiaomimimo.com 登录后复制请求 Cookie', action: '验证并读取 Token Plan', emptyError: '请粘贴小米 MiMo 控制台 Cookie', multiline: true },
+    tokenrhythm: { title: '基元律动网页登录态', detail: '华为相关的 tokenrhythm.studio 账号；支持 sess_ 会话令牌或包含 tr_session / tr_ref_device 的 Cookie。', placeholder: 'sess_...\n或 tr_session=sess_...; tr_ref_device=...', action: '验证并读取人民币余额', emptyError: '请粘贴基元律动 sess_ 会话令牌或 Cookie', multiline: true },
+  }
+  return copies[providerId] ?? { title: '认证信息', detail: '用于读取真实额度。', placeholder: '', action: '验证并连接', emptyError: '请输入认证信息' }
 }
 
 function UsagePage({ data }: { data: Overview }) { return <><KPIBand data={data} /><div className="chart-deck"><TokenChart data={data} /><ModelDonut data={data} /></div></> }
@@ -311,4 +312,4 @@ function EmptyState({ title, detail }: { title: string; detail: string }) { retu
 function DashboardSkeleton() { return <div className="skeleton-grid">{Array.from({ length: 8 }).map((_, index) => <i key={index} />)}</div> }
 function formatDateTime(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
 function capabilityLabel(value: string) { return ({ quota: '额度', usage: '用量', credits: '积分', balance: '余额', token_plan: 'Token Plan', checkin: '签到' } as Record<string, string>)[value] ?? value }
-function authMethodLabel(value?: string) { return ({ credential_import: '认证文件导入', device_code: '官方设备登录', oauth_qr: '官方二维码登录', api_key: 'API Key', cookie: '控制台 Cookie' } as Record<string, string>)[value ?? ''] ?? (value || '未记录') }
+function authMethodLabel(value?: string) { return ({ credential_import: '认证文件导入', device_code: '官方设备登录', oauth_qr: '官方二维码登录', api_key: 'API Key', cookie: '控制台 Cookie', session_token: '网页登录态' } as Record<string, string>)[value ?? ''] ?? (value || '未记录') }

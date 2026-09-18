@@ -11,6 +11,6 @@ describe('format helpers', () => {
   })
 
   it('formats currency balances', () => {
-    expect(quotaValue(128.42, 'CNY')).toBe('¥ 128.42')
+    expect(quotaValue(128.42, 'CNY')).toBe('¥128.42')
   })
 })

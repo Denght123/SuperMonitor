@@ -9,27 +9,35 @@ import (
 	"time"
 
 	"github.com/Denght123/SuperMonitor/internal/domain"
+	"github.com/Denght123/SuperMonitor/internal/integration/claude"
 	"github.com/Denght123/SuperMonitor/internal/integration/codex"
 	"github.com/Denght123/SuperMonitor/internal/integration/deepseek"
+	"github.com/Denght123/SuperMonitor/internal/integration/gemini"
 	"github.com/Denght123/SuperMonitor/internal/integration/genericquota"
 	"github.com/Denght123/SuperMonitor/internal/integration/mimo"
+	"github.com/Denght123/SuperMonitor/internal/integration/tokenrhythm"
 	"github.com/Denght123/SuperMonitor/internal/integration/workbuddy"
+	"github.com/Denght123/SuperMonitor/internal/integration/zhipu"
 	"github.com/Denght123/SuperMonitor/internal/secure"
 	"github.com/Denght123/SuperMonitor/internal/store/sqlite"
 	"github.com/google/uuid"
 )
 
 type Accounts struct {
-	store     *sqlite.Store
-	vault     *secure.Vault
-	codex     *codex.Client
-	deepseek  *deepseek.Client
-	generic   *genericquota.Client
-	mimo      *mimo.Client
-	workbuddy *workbuddy.Client
-	events    *EventHub
-	mu        sync.RWMutex
-	sessions  map[string]*DeviceLoginSession
+	store       *sqlite.Store
+	vault       *secure.Vault
+	claude      *claude.Client
+	codex       *codex.Client
+	deepseek    *deepseek.Client
+	gemini      *gemini.Client
+	generic     *genericquota.Client
+	mimo        *mimo.Client
+	tokenrhythm *tokenrhythm.Client
+	workbuddy   *workbuddy.Client
+	zhipu       *zhipu.Client
+	events      *EventHub
+	mu          sync.RWMutex
+	sessions    map[string]*DeviceLoginSession
 }
 
 type DeviceLoginSession struct {
@@ -44,7 +52,7 @@ type DeviceLoginSession struct {
 }
 
 func NewAccounts(store *sqlite.Store, vault *secure.Vault, events *EventHub) *Accounts {
-	return &Accounts{store: store, vault: vault, codex: codex.NewClient(), deepseek: deepseek.NewClient(), generic: genericquota.NewClient(), mimo: mimo.NewClient(), workbuddy: workbuddy.NewClient(), events: events, sessions: make(map[string]*DeviceLoginSession)}
+	return &Accounts{store: store, vault: vault, claude: claude.NewClient(), codex: codex.NewClient(), deepseek: deepseek.NewClient(), gemini: gemini.NewClient(), generic: genericquota.NewClient(), mimo: mimo.NewClient(), tokenrhythm: tokenrhythm.NewClient(), workbuddy: workbuddy.NewClient(), zhipu: zhipu.NewClient(), events: events, sessions: make(map[string]*DeviceLoginSession)}
 }
 
 func (s *Accounts) ImportCodex(ctx context.Context, alias string, raw []byte) (domain.AccountSummary, error) {
@@ -73,6 +81,22 @@ func (s *Accounts) ImportWorkBuddy(ctx context.Context, providerID, alias string
 	return s.connectWorkBuddyWithID(ctx, providerID+"-"+uuid.NewString(), providerID, alias, "credential_import", credential)
 }
 
+func (s *Accounts) ImportClaude(ctx context.Context, alias string, raw []byte) (domain.AccountSummary, error) {
+	credential, err := claude.ParseCredential(raw)
+	if err != nil {
+		return domain.AccountSummary{}, err
+	}
+	return s.connectClaudeWithID(ctx, "claude-code-"+uuid.NewString(), alias, credential)
+}
+
+func (s *Accounts) ImportGemini(ctx context.Context, alias string, raw []byte) (domain.AccountSummary, error) {
+	credential, err := gemini.ParseCredential(raw)
+	if err != nil {
+		return domain.AccountSummary{}, err
+	}
+	return s.connectGeminiWithID(ctx, "gemini-cli-"+uuid.NewString(), alias, credential)
+}
+
 func (s *Accounts) ConnectDeepSeek(ctx context.Context, alias, apiKey string) (domain.AccountSummary, error) {
 	return s.connectDeepSeekWithID(ctx, "deepseek-"+uuid.NewString(), alias, deepseek.Credential{APIKey: strings.TrimSpace(apiKey)})
 }
@@ -83,6 +107,18 @@ func (s *Accounts) ConnectMimo(ctx context.Context, alias, cookie string) (domai
 		return domain.AccountSummary{}, err
 	}
 	return s.connectMimoWithID(ctx, "mimo-"+uuid.NewString(), alias, mimo.Credential{Cookie: normalized})
+}
+
+func (s *Accounts) ConnectZhipu(ctx context.Context, alias, apiKey string) (domain.AccountSummary, error) {
+	return s.connectZhipuWithID(ctx, "zhipu-"+uuid.NewString(), alias, zhipu.Credential{APIKey: strings.TrimSpace(apiKey)})
+}
+
+func (s *Accounts) ConnectTokenRhythm(ctx context.Context, alias, rawCredential string) (domain.AccountSummary, error) {
+	credential, err := tokenrhythm.NormalizeCredential(rawCredential)
+	if err != nil {
+		return domain.AccountSummary{}, err
+	}
+	return s.connectTokenRhythmWithID(ctx, "tokenrhythm-"+uuid.NewString(), alias, credential)
 }
 
 func (s *Accounts) ConnectGeneric(ctx context.Context, providerID, alias string, credential genericquota.Credential) (domain.AccountSummary, error) {
@@ -179,6 +215,12 @@ func (s *Accounts) RefreshOne(ctx context.Context, id string) (domain.AccountSum
 		return domain.AccountSummary{}, err
 	}
 	switch account.ProviderID {
+	case "claude-code":
+		var credential claude.Credential
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			return domain.AccountSummary{}, credentialError(err)
+		}
+		return s.connectClaudeWithID(ctx, account.ID, account.Alias, credential)
 	case "codex":
 		var credential codex.Credential
 		if err := json.Unmarshal(plain, &credential); err != nil {
@@ -191,19 +233,37 @@ func (s *Accounts) RefreshOne(ctx context.Context, id string) (domain.AccountSum
 			return domain.AccountSummary{}, credentialError(err)
 		}
 		return s.connectDeepSeekWithID(ctx, account.ID, account.Alias, credential)
+	case "gemini-cli":
+		var credential gemini.Credential
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			return domain.AccountSummary{}, credentialError(err)
+		}
+		return s.connectGeminiWithID(ctx, account.ID, account.Alias, credential)
 	case "mimo":
 		var credential mimo.Credential
 		if err := json.Unmarshal(plain, &credential); err != nil {
 			return domain.AccountSummary{}, credentialError(err)
 		}
 		return s.connectMimoWithID(ctx, account.ID, account.Alias, credential)
+	case "tokenrhythm":
+		var credential tokenrhythm.Credential
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			return domain.AccountSummary{}, credentialError(err)
+		}
+		return s.connectTokenRhythmWithID(ctx, account.ID, account.Alias, credential)
 	case "workbuddy-cn", "workbuddy-global":
 		var credential workbuddy.Credential
 		if err := json.Unmarshal(plain, &credential); err != nil {
 			return domain.AccountSummary{}, credentialError(err)
 		}
 		return s.connectWorkBuddyWithID(ctx, account.ID, account.ProviderID, account.Alias, account.AuthMethod, credential)
-	case "trae-cn", "qoder-cn", "coze-cn", "bailian", "zhipu", "gemini-cli", "claude-code", "qoder-global", "kiro", "cursor":
+	case "zhipu":
+		var credential zhipu.Credential
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			return domain.AccountSummary{}, credentialError(err)
+		}
+		return s.connectZhipuWithID(ctx, account.ID, account.Alias, credential)
+	case "trae-cn", "qoder-cn", "coze-cn", "bailian", "qoder-global", "kiro", "cursor":
 		var credential genericquota.Credential
 		if err := json.Unmarshal(plain, &credential); err != nil {
 			return domain.AccountSummary{}, credentialError(err)
@@ -212,6 +272,42 @@ func (s *Accounts) RefreshOne(ctx context.Context, id string) (domain.AccountSum
 	default:
 		return domain.AccountSummary{}, fmt.Errorf("平台 %s 尚未实现真实刷新", account.ProviderID)
 	}
+}
+
+func (s *Accounts) connectClaudeWithID(ctx context.Context, id, alias string, credential claude.Credential) (domain.AccountSummary, error) {
+	usage, err := s.claude.FetchUsage(ctx, credential)
+	if err != nil {
+		return domain.AccountSummary{}, fmt.Errorf("无法读取真实 Claude Code 额度: %w", err)
+	}
+	if strings.TrimSpace(alias) == "" {
+		alias = "Claude Code 账号"
+	}
+	windows := make([]domain.QuotaSignal, 0, len(usage.Windows))
+	for index, window := range usage.Windows {
+		remaining, total := window.RemainingPercent, 100.0
+		windows = append(windows, domain.QuotaSignal{ID: fmt.Sprintf("claude-live-%d", index), Provider: "Claude Code", Label: window.Label, Kind: "rate_window", Value: remaining, Total: &total, Unit: "%", RemainingPercent: &remaining, ResetAt: window.ResetAt, Status: quotaStatus(remaining), Source: "Anthropic /api/oauth/usage", Confidence: "live"})
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := newConnected(id, "claude-code", alias, "", firstNonEmpty(usage.Plan, "Subscription"), "credential_import", "Claude Code OAuth Usage", windows, now)
+	return s.persist(ctx, account, credential, "Claude Code")
+}
+
+func (s *Accounts) connectGeminiWithID(ctx context.Context, id, alias string, credential gemini.Credential) (domain.AccountSummary, error) {
+	usage, _, err := s.gemini.FetchUsage(ctx, &credential)
+	if err != nil {
+		return domain.AccountSummary{}, fmt.Errorf("无法读取真实 Gemini Code Assist 额度: %w", err)
+	}
+	if strings.TrimSpace(alias) == "" {
+		alias = "Gemini Code Assist"
+	}
+	windows := make([]domain.QuotaSignal, 0, len(usage.Windows))
+	for index, window := range usage.Windows {
+		remaining, total := window.RemainingPercent, 100.0
+		windows = append(windows, domain.QuotaSignal{ID: fmt.Sprintf("gemini-live-%d", index), Provider: "Gemini", Label: window.Label, Kind: "rate_window", Value: remaining, Total: &total, Unit: "%", RemainingPercent: &remaining, ResetAt: window.ResetAt, Status: quotaStatus(remaining), Source: "Gemini Code Assist retrieveUserQuota", Confidence: "live"})
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := newConnected(id, "gemini-cli", alias, "", "Code Assist", "credential_import", "Gemini Code Assist", windows, now)
+	return s.persist(ctx, account, credential, "Gemini")
 }
 
 func (s *Accounts) RefreshAll(ctx context.Context) error {
@@ -282,6 +378,43 @@ func (s *Accounts) connectMimoWithID(ctx context.Context, id, alias string, cred
 	now := time.Now().UTC().Truncate(time.Second)
 	account := newConnected(id, "mimo", alias, "", "Token Plan", "cookie", "MiMo 官方控制台", []domain.QuotaSignal{signal}, now)
 	return s.persist(ctx, account, credential, "MiMo")
+}
+
+func (s *Accounts) connectZhipuWithID(ctx context.Context, id, alias string, credential zhipu.Credential) (domain.AccountSummary, error) {
+	usage, err := s.zhipu.FetchUsage(ctx, credential)
+	if err != nil {
+		return domain.AccountSummary{}, fmt.Errorf("无法读取真实智谱额度: %w", err)
+	}
+	if strings.TrimSpace(alias) == "" {
+		alias = "智谱 Coding Plan"
+	}
+	windows := make([]domain.QuotaSignal, 0, len(usage.Windows))
+	for index, window := range usage.Windows {
+		remaining := window.RemainingPercent
+		signal := domain.QuotaSignal{ID: fmt.Sprintf("zhipu-live-%d", index), Provider: "智谱 AI", Label: window.Label, Kind: window.Kind, Value: window.Remaining, Unit: window.Unit, RemainingPercent: &remaining, ResetAt: window.ResetAt, Status: quotaStatus(remaining), Source: "智谱 /api/monitor/usage/quota/limit", Confidence: "live"}
+		if window.Total > 0 {
+			total := window.Total
+			signal.Total = &total
+		}
+		windows = append(windows, signal)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := newConnected(id, "zhipu", alias, "", firstNonEmpty(usage.Plan, "Coding Plan"), "api_key", "智谱 Coding Plan 实时接口", windows, now)
+	return s.persist(ctx, account, credential, "智谱 AI")
+}
+
+func (s *Accounts) connectTokenRhythmWithID(ctx context.Context, id, alias string, credential tokenrhythm.Credential) (domain.AccountSummary, error) {
+	usage, err := s.tokenrhythm.FetchUsage(ctx, credential)
+	if err != nil {
+		return domain.AccountSummary{}, fmt.Errorf("无法读取真实基元律动余额: %w", err)
+	}
+	if strings.TrimSpace(alias) == "" {
+		alias = "基元律动账号"
+	}
+	signal := domain.QuotaSignal{ID: "tokenrhythm-live-balance", Provider: "基元律动 TokenRhythm", Label: "可用余额", Kind: "balance", Value: usage.AvailableBalance, Unit: "CNY", ExpiresAt: usage.ExpiresAt, Status: "healthy", Source: "TokenRhythm /api/usage-summary", Confidence: "live"}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := newConnected(id, "tokenrhythm", alias, "", "钱包余额", "session_token", "TokenRhythm 官方站点接口", []domain.QuotaSignal{signal}, now)
+	return s.persist(ctx, account, credential, "基元律动")
 }
 
 func (s *Accounts) connectWorkBuddyWithID(ctx context.Context, id, providerID, alias, authMethod string, credential workbuddy.Credential) (domain.AccountSummary, error) {
@@ -401,8 +534,14 @@ func summaryFromConnected(account domain.ConnectedAccount) domain.AccountSummary
 	return domain.AccountSummary{ID: account.ID, ProviderID: account.ProviderID, Provider: account.ProviderName, Region: account.Region, Alias: account.Alias, Services: providerServices(account.ProviderID), PrimaryMetric: primary, SecondaryMetric: secondary, Status: account.Status, Source: account.Source, LastRefreshedAt: account.LastRefreshedAt, NextRefreshAt: account.NextRefreshAt, Error: account.Error, Email: account.Email, Plan: account.Plan, AuthMethod: account.AuthMethod, Synthetic: false, QuotaWindows: account.QuotaWindows}
 }
 func signalSummary(signal domain.QuotaSignal) string {
-	if signal.RemainingPercent != nil {
+	if signal.Kind == "rate_window" && signal.RemainingPercent != nil {
 		return fmt.Sprintf("%s %.0f%%", signal.Label, *signal.RemainingPercent)
+	}
+	if signal.Unit == "CNY" {
+		return fmt.Sprintf("%s ¥%.2f", signal.Label, signal.Value)
+	}
+	if signal.Unit == "credits" {
+		return fmt.Sprintf("%s %.2f credits", signal.Label, signal.Value)
 	}
 	return fmt.Sprintf("%s %.2f %s", signal.Label, signal.Value, signal.Unit)
 }
@@ -410,7 +549,7 @@ func providerMeta(id string) (string, string, bool) {
 	providers := map[string][2]string{
 		"trae-cn": {"TRAE CN / TraeCode / TraeWork", "CN"}, "qoder-cn": {"Qoder CN", "CN"},
 		"workbuddy-cn": {"WorkBuddy / CodeBuddy 国内版", "CN"}, "coze-cn": {"扣子 Coze", "CN"},
-		"bailian": {"阿里云百炼 Token Plan", "CN"}, "mimo": {"小米 MiMo（基元混动）", "CN"},
+		"bailian": {"阿里云百炼 Token Plan", "CN"}, "mimo": {"小米 MiMo", "CN"}, "tokenrhythm": {"基元律动 TokenRhythm", "CN"},
 		"deepseek": {"DeepSeek", "CN"}, "zhipu": {"智谱 AI", "CN"}, "codex": {"Codex", "Global"},
 		"gemini-cli": {"Gemini", "Global"}, "claude-code": {"Claude Code", "Global"},
 		"qoder-global": {"Qoder 国际版", "Global"}, "workbuddy-global": {"WorkBuddy / CodeBuddy 国际版", "Global"},

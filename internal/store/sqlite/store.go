@@ -521,21 +521,22 @@ func (s *Store) EnsureProviderCatalog(ctx context.Context) error {
 		id, name, region, tier, status string
 		auth, capabilities             []string
 	}{
-		{"trae-cn", "TRAE CN / TraeCode / TraeWork", "CN", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota", "usage"}},
-		{"qoder-cn", "Qoder CN", "CN", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota"}},
+		{"trae-cn", "TRAE CN / TraeCode / TraeWork", "CN", "community", "researching", []string{"credential_import"}, []string{"quota", "usage"}},
+		{"qoder-cn", "Qoder CN", "CN", "community", "researching", []string{"credential_import"}, []string{"quota"}},
 		{"workbuddy-cn", "WorkBuddy / CodeBuddy 国内版", "CN", "community", "healthy", []string{"oauth", "credential_import"}, []string{"credits", "checkin"}},
-		{"coze-cn", "扣子 Coze", "CN", "official", "healthy", []string{"custom_endpoint", "api_key"}, []string{"credits", "usage"}},
-		{"bailian", "阿里云百炼 Token Plan", "CN", "official", "healthy", []string{"custom_endpoint", "api_key"}, []string{"token_plan", "usage"}},
-		{"mimo", "小米 MiMo（基元混动）", "CN", "community", "healthy", []string{"cookie"}, []string{"token_plan"}},
+		{"coze-cn", "扣子 Coze", "CN", "official", "researching", []string{"api_key"}, []string{"credits", "usage"}},
+		{"bailian", "阿里云百炼 Token Plan", "CN", "official", "researching", []string{"api_key"}, []string{"token_plan", "usage"}},
+		{"mimo", "小米 MiMo", "CN", "community", "healthy", []string{"cookie"}, []string{"token_plan"}},
+		{"tokenrhythm", "基元律动 TokenRhythm", "CN", "community", "healthy", []string{"session_token"}, []string{"balance", "usage"}},
 		{"deepseek", "DeepSeek", "CN", "official", "healthy", []string{"api_key"}, []string{"balance"}},
-		{"zhipu", "智谱 AI", "CN", "official", "healthy", []string{"custom_endpoint", "api_key"}, []string{"balance", "usage"}},
+		{"zhipu", "智谱 AI", "CN", "community", "healthy", []string{"api_key"}, []string{"credits", "quota"}},
 		{"codex", "Codex", "Global", "community", "healthy", []string{"device_code", "credential_import"}, []string{"quota", "credits"}},
-		{"gemini-cli", "Gemini", "Global", "official", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota", "usage"}},
-		{"claude-code", "Claude Code", "Global", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota", "usage"}},
-		{"qoder-global", "Qoder 国际版", "Global", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota"}},
+		{"gemini-cli", "Gemini", "Global", "community", "healthy", []string{"credential_import"}, []string{"quota", "usage"}},
+		{"claude-code", "Claude Code", "Global", "community", "healthy", []string{"credential_import"}, []string{"quota", "usage"}},
+		{"qoder-global", "Qoder 国际版", "Global", "community", "researching", []string{"credential_import"}, []string{"quota"}},
 		{"workbuddy-global", "WorkBuddy / CodeBuddy 国际版", "Global", "community", "healthy", []string{"oauth", "credential_import"}, []string{"credits"}},
-		{"kiro", "Kiro", "Global", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota"}},
-		{"cursor", "Cursor", "Global", "community", "healthy", []string{"custom_endpoint", "credential_import"}, []string{"quota", "usage"}},
+		{"kiro", "Kiro", "Global", "community", "researching", []string{"credential_import"}, []string{"quota"}},
+		{"cursor", "Cursor", "Global", "community", "researching", []string{"credential_import"}, []string{"quota", "usage"}},
 	}
 	for _, provider := range providers {
 		auth, _ := json.Marshal(provider.auth)
@@ -557,8 +558,11 @@ func providerPresentation(id string) (string, string, bool) {
 		"workbuddy-cn": "积分包、到期时间与签到活动。",
 		"bailian":      "Token Plan 额度、周期和模型用量。",
 		"deepseek":     "账户余额与 API Token 用量。",
-		"mimo":         "粘贴小米 MiMo 控制台 Cookie，读取 Token Plan 月度额度与周期。",
-		"claude-code":  "Claude Code 订阅额度窗口。",
+		"mimo":         "小米 MiMo Token Plan 月度额度与周期。",
+		"tokenrhythm":  "基元律动人民币余额、用量和余额到期时间。",
+		"zhipu":        "导入 API Key 后自动读取 5 小时与周积分窗口。",
+		"gemini-cli":   "导入 Gemini CLI oauth_creds.json 读取模型额度。",
+		"claude-code":  "导入 Claude Code .credentials.json 读取订阅额度窗口。",
 		"cursor":       "订阅请求额度和模型用量。",
 	}
 	description := descriptions[id]
@@ -566,10 +570,11 @@ func providerPresentation(id string) (string, string, bool) {
 		description = "独立账号池与平台原生额度监控。"
 	}
 	category := "国际平台"
-	if strings.HasSuffix(id, "-cn") || id == "coze-cn" || id == "bailian" || id == "mimo" || id == "deepseek" || id == "zhipu" {
+	if strings.HasSuffix(id, "-cn") || id == "coze-cn" || id == "bailian" || id == "mimo" || id == "tokenrhythm" || id == "deepseek" || id == "zhipu" {
 		category = "国内平台"
 	}
-	return description, category, true
+	implemented := map[string]bool{"codex": true, "workbuddy-cn": true, "workbuddy-global": true, "deepseek": true, "mimo": true, "tokenrhythm": true, "zhipu": true, "gemini-cli": true, "claude-code": true}
+	return description, category, implemented[id]
 }
 
 func valueOrZero(value *float64) float64 {
@@ -580,8 +585,14 @@ func valueOrZero(value *float64) float64 {
 }
 
 func quotaSummary(signal domain.QuotaSignal) string {
-	if signal.RemainingPercent != nil {
+	if signal.Kind == "rate_window" && signal.RemainingPercent != nil {
 		return fmt.Sprintf("%s %.0f%%", signal.Label, *signal.RemainingPercent)
+	}
+	if signal.Unit == "CNY" {
+		return fmt.Sprintf("%s ¥%.2f", signal.Label, signal.Value)
+	}
+	if signal.Unit == "credits" {
+		return fmt.Sprintf("%s %.2f credits", signal.Label, signal.Value)
 	}
 	return fmt.Sprintf("%s %.2f %s", signal.Label, signal.Value, signal.Unit)
 }

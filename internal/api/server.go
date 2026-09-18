@@ -93,6 +93,10 @@ func New(deps Dependencies) http.Handler {
 				account, err = deps.Accounts.ImportCodex(r.Context(), r.FormValue("alias"), body)
 			case "workbuddy-cn", "workbuddy-global":
 				account, err = deps.Accounts.ImportWorkBuddy(r.Context(), providerID, r.FormValue("alias"), body)
+			case "claude-code":
+				account, err = deps.Accounts.ImportClaude(r.Context(), r.FormValue("alias"), body)
+			case "gemini-cli":
+				account, err = deps.Accounts.ImportGemini(r.Context(), r.FormValue("alias"), body)
 			default:
 				writeError(w, http.StatusBadRequest, "import_unsupported", "该平台不支持认证文件导入")
 				return
@@ -123,6 +127,10 @@ func New(deps Dependencies) http.Handler {
 				account, err = deps.Accounts.ConnectDeepSeek(r.Context(), payload.Alias, payload.Secret)
 			case "mimo":
 				account, err = deps.Accounts.ConnectMimo(r.Context(), payload.Alias, payload.Secret)
+			case "zhipu":
+				account, err = deps.Accounts.ConnectZhipu(r.Context(), payload.Alias, payload.Secret)
+			case "tokenrhythm":
+				account, err = deps.Accounts.ConnectTokenRhythm(r.Context(), payload.Alias, payload.Secret)
 			default:
 				writeError(w, http.StatusBadRequest, "secret_unsupported", "该平台不支持密钥方式连接")
 				return

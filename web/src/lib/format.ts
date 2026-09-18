@@ -26,8 +26,8 @@ export function relativeTime(value: string): string {
 
 export function quotaValue(value: number, unit: string): string {
   if (unit === '%') return `${value.toFixed(0)}%`
-  if (unit === 'CNY') return `¥ ${value.toFixed(2)}`
+  if (unit === 'CNY') return `¥${value.toFixed(2)}`
   if (unit === 'tokens') return compactNumber(value)
-  if (unit === 'credits') return `${value.toFixed(1)}`
-  return `${value}`
+  if (unit === 'credits') return `${value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })} credits`
+  return `${value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}${unit ? ` ${unit}` : ''}`
 }
