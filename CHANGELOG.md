@@ -2,6 +2,20 @@
 
 All notable changes to SuperMonitor are documented here.
 
+## [0.6.1] - 2026-09-19
+
+### Added
+
+- Real WorkBuddy CN daily check-in discovery and execution; the activity center only lists activities confirmed by the platform API.
+- Zhipu Open Platform API-key validation through the official model-list endpoint when an account has no Coding Plan.
+
+### Fixed
+
+- Codex CPA imports now explain rotated or reused refresh tokens and reuse newer locally stored credentials for the same account when available.
+- Codex accounts without credits no longer render a misleading `0 credits` card.
+- Rotated Codex credentials are persisted when a refresh succeeds before a subsequent quota request fails.
+- Codex and WorkBuddy activity/billing types are displayed independently according to their real charging model.
+
 ## [0.5.0] - 2026-09-19
 
 ### Added

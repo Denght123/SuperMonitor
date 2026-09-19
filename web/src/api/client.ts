@@ -6,6 +6,7 @@ export type Alert = components['schemas']['Alert']
 export type QuotaSignal = components['schemas']['QuotaSignal']
 export type Provider = components['schemas']['Provider']
 export type DeviceLoginSession = components['schemas']['DeviceLoginSession']
+export type ActivityItem = components['schemas']['Activity']
 
 type APIErrorShape = {
   error?: {
@@ -73,4 +74,6 @@ export const api = {
   }),
   providerOAuthStatus: (providerId: string, id: string) => request<DeviceLoginSession>(`/providers/${encodeURIComponent(providerId)}/oauth/${encodeURIComponent(id)}`),
   refreshAccount: (id: string) => request<AccountSummary>(`/accounts/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
+  activities: () => request<{ items: ActivityItem[] }>('/activities'),
+  runActivity: (accountId: string, activityId: string) => request<ActivityItem>(`/activities/${encodeURIComponent(accountId)}/${encodeURIComponent(activityId)}`, { method: 'POST' }),
 }

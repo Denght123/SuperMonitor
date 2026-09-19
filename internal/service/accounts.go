@@ -85,7 +85,41 @@ func (s *Accounts) ImportCodex(ctx context.Context, alias string, raw []byte) (d
 			return domain.AccountSummary{}, fmt.Errorf("OAuth 文件仅含 refresh_token，但刷新失败: %w", err)
 		}
 	}
+	if existing, existingCredential, ok := s.findCodexCredential(ctx, credential.AccountID); ok {
+		if strings.TrimSpace(alias) == "" {
+			alias = existing.Alias
+		}
+		return s.connectCodexWithID(ctx, existing.ID, alias, existing.AuthMethod, existingCredential)
+	}
 	return s.connectCodexWithID(ctx, "codex-"+uuid.NewString(), alias, "credential_import", credential)
+}
+
+func (s *Accounts) findCodexCredential(ctx context.Context, accountID string) (domain.ConnectedAccount, codex.Credential, bool) {
+	if strings.TrimSpace(accountID) == "" {
+		return domain.ConnectedAccount{}, codex.Credential{}, false
+	}
+	accounts, err := s.store.ConnectedAccounts(ctx)
+	if err != nil {
+		return domain.ConnectedAccount{}, codex.Credential{}, false
+	}
+	for _, account := range accounts {
+		if account.ProviderID != "codex" {
+			continue
+		}
+		stored, encrypted, err := s.store.ConnectedAccount(ctx, account.ID)
+		if err != nil {
+			continue
+		}
+		plain, err := s.vault.Decrypt(encrypted)
+		if err != nil {
+			continue
+		}
+		var credential codex.Credential
+		if json.Unmarshal(plain, &credential) == nil && credential.AccountID == accountID {
+			return stored, credential, true
+		}
+	}
+	return domain.ConnectedAccount{}, codex.Credential{}, false
 }
 
 func (s *Accounts) ImportWorkBuddy(ctx context.Context, providerID, alias string, raw []byte) (domain.AccountSummary, error) {
@@ -531,6 +565,77 @@ func (s *Accounts) RefreshOne(ctx context.Context, id string) (domain.AccountSum
 	}
 }
 
+func (s *Accounts) ListActivities(ctx context.Context) ([]domain.Activity, error) {
+	accounts, err := s.store.ConnectedAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	activities := make([]domain.Activity, 0)
+	for _, account := range accounts {
+		if account.ProviderID != "workbuddy-cn" {
+			continue
+		}
+		stored, encrypted, err := s.store.ConnectedAccount(ctx, account.ID)
+		if err != nil {
+			continue
+		}
+		plain, err := s.vault.Decrypt(encrypted)
+		if err != nil {
+			continue
+		}
+		var credential workbuddy.Credential
+		if json.Unmarshal(plain, &credential) != nil {
+			continue
+		}
+		status, refreshed, err := s.workbuddy.FetchCheckinStatus(ctx, &credential)
+		if err != nil {
+			continue
+		}
+		if refreshed {
+			_, _ = s.persist(ctx, stored, credential, "WorkBuddy")
+		}
+		state, description := "available", "今日尚未签到，可领取平台活动积分"
+		if status.TodayCheckedIn {
+			state, description = "completed", "今日已签到"
+		}
+		activities = append(activities, domain.Activity{ID: "daily-checkin", AccountID: account.ID, AccountAlias: account.Alias, ProviderID: account.ProviderID, Provider: account.ProviderName, Title: "每日签到", Description: description, Status: state, Action: "checkin"})
+	}
+	return activities, nil
+}
+
+func (s *Accounts) RunActivity(ctx context.Context, accountID, activityID string) (domain.Activity, error) {
+	if activityID != "daily-checkin" {
+		return domain.Activity{}, fmt.Errorf("不支持的活动")
+	}
+	account, encrypted, err := s.store.ConnectedAccount(ctx, accountID)
+	if err != nil {
+		return domain.Activity{}, err
+	}
+	if account.ProviderID != "workbuddy-cn" {
+		return domain.Activity{}, fmt.Errorf("该账号没有可执行的签到活动")
+	}
+	plain, err := s.vault.Decrypt(encrypted)
+	if err != nil {
+		return domain.Activity{}, credentialError(err)
+	}
+	var credential workbuddy.Credential
+	if err := json.Unmarshal(plain, &credential); err != nil {
+		return domain.Activity{}, credentialError(err)
+	}
+	already, _, err := s.workbuddy.Checkin(ctx, &credential)
+	if err != nil {
+		return domain.Activity{}, err
+	}
+	if _, err := s.connectWorkBuddyWithID(ctx, account.ID, account.ProviderID, account.Alias, account.AuthMethod, credential); err != nil {
+		return domain.Activity{}, fmt.Errorf("签到成功，但刷新积分失败: %w", err)
+	}
+	description := "签到成功，积分余额已刷新"
+	if already {
+		description = "今日已签到，积分余额已刷新"
+	}
+	return domain.Activity{ID: activityID, AccountID: account.ID, AccountAlias: account.Alias, ProviderID: account.ProviderID, Provider: account.ProviderName, Title: "每日签到", Description: description, Status: "completed", Action: "checkin"}, nil
+}
+
 func (s *Accounts) connectAliyunWithID(ctx context.Context, id, alias string, credential aliyunbss.Credential) (domain.AccountSummary, error) {
 	balance, err := s.aliyun.FetchBalance(ctx, credential)
 	if err != nil {
@@ -734,8 +839,13 @@ func (s *Accounts) RefreshAll(ctx context.Context) error {
 }
 
 func (s *Accounts) connectCodexWithID(ctx context.Context, id, alias, authMethod string, credential codex.Credential) (domain.AccountSummary, error) {
-	usage, _, err := s.codex.FetchUsage(ctx, &credential)
+	usage, refreshed, err := s.codex.FetchUsage(ctx, &credential)
 	if err != nil {
+		if refreshed {
+			if existing, _, loadErr := s.store.ConnectedAccount(ctx, id); loadErr == nil {
+				_, _ = s.persist(ctx, existing, credential, "Codex")
+			}
+		}
 		return domain.AccountSummary{}, fmt.Errorf("无法读取真实 Codex 额度: %s", err)
 	}
 	if strings.TrimSpace(alias) == "" {
@@ -792,7 +902,7 @@ func (s *Accounts) connectZhipuWithID(ctx context.Context, id, alias string, cre
 		return domain.AccountSummary{}, fmt.Errorf("无法读取真实智谱额度: %w", err)
 	}
 	if strings.TrimSpace(alias) == "" {
-		alias = "智谱 Coding Plan"
+		alias = "智谱开放平台"
 	}
 	windows := make([]domain.QuotaSignal, 0, len(usage.Windows))
 	for index, window := range usage.Windows {
@@ -805,7 +915,11 @@ func (s *Accounts) connectZhipuWithID(ctx context.Context, id, alias string, cre
 		windows = append(windows, signal)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
-	account := newConnected(id, "zhipu", alias, "", firstNonEmpty(usage.Plan, "Coding Plan"), "api_key", "智谱 Coding Plan 实时接口", windows, now)
+	source := "智谱 Coding Plan 实时接口"
+	if !usage.QuotaAvailable {
+		source = "智谱官方 /api/paas/v4/models"
+	}
+	account := newConnected(id, "zhipu", alias, "", firstNonEmpty(usage.Plan, "开放平台 API Key"), "api_key", source, windows, now)
 	return s.persist(ctx, account, credential, "智谱 AI")
 }
 
@@ -933,6 +1047,8 @@ func summaryFromConnected(account domain.ConnectedAccount) domain.AccountSummary
 	primary, secondary := "等待额度数据", ""
 	if len(account.QuotaWindows) > 0 {
 		primary = signalSummary(account.QuotaWindows[0])
+	} else if strings.TrimSpace(account.Plan) != "" {
+		primary = account.Plan
 	}
 	if len(account.QuotaWindows) > 1 {
 		secondary = signalSummary(account.QuotaWindows[1])

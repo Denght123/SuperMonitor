@@ -32,6 +32,26 @@ func TestParseUsageUsesNativeWindowDuration(t *testing.T) {
 	}
 }
 
+func TestParseUsageHidesUnavailableZeroCredits(t *testing.T) {
+	usage, err := parseUsage([]byte(`{"rate_limit":{"primary_window":{"used_percent":28,"limit_window_seconds":18000}},"credits":{"has_credits":false,"balance":0}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Credits != nil {
+		t.Fatalf("credits must be hidden when has_credits is false: %+v", usage)
+	}
+}
+
+func TestParseUsageKeepsRealCredits(t *testing.T) {
+	usage, err := parseUsage([]byte(`{"rate_limit":{"primary_window":{"used_percent":28,"limit_window_seconds":18000}},"credits":{"has_credits":true,"balance":10}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Credits == nil || *usage.Credits != 10 {
+		t.Fatalf("expected real credits balance: %+v", usage)
+	}
+}
+
 func TestParseCredentialRejectsMissingToken(t *testing.T) {
 	if _, err := ParseCredential([]byte(`{"tokens":{}}`)); err == nil {
 		t.Fatal("expected missing access token error")

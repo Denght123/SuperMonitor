@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: SuperMonitor API
-  version: 0.5.0
+  version: 0.6.1
   description: Monitoring-only API. It intentionally exposes no model proxy endpoints.
 servers:
   - url: /api/v1
@@ -224,6 +224,39 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AccountSummary" }
+  /activities:
+    get:
+      operationId: listActivities
+      responses:
+        "200":
+          description: Real activities available for connected accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Activity" }
+  /activities/{accountID}/{activityID}:
+    post:
+      operationId: runActivity
+      parameters:
+        - in: path
+          name: accountID
+          required: true
+          schema: { type: string }
+        - in: path
+          name: activityID
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Activity executed and account quota refreshed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Activity" }
   /events:
     get:
       operationId: subscribeEvents
@@ -232,6 +265,19 @@ paths:
           description: Server-sent event stream
 components:
   schemas:
+    Activity:
+      type: object
+      required: [id, accountId, accountAlias, providerId, provider, title, description, status, action]
+      properties:
+        id: { type: string }
+        accountId: { type: string }
+        accountAlias: { type: string }
+        providerId: { type: string }
+        provider: { type: string }
+        title: { type: string }
+        description: { type: string }
+        status: { type: string, enum: [available, completed] }
+        action: { type: string }
     Overview:
       type: object
       required: [generatedAt, environment, connection, kpis, tokenTrend, modelUsage, quotaSignals, accounts, alerts]

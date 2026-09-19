@@ -85,6 +85,18 @@ type Alert struct {
 	Recovery  string    `json:"recovery"`
 }
 
+type Activity struct {
+	ID           string `json:"id"`
+	AccountID    string `json:"accountId"`
+	AccountAlias string `json:"accountAlias"`
+	ProviderID   string `json:"providerId"`
+	Provider     string `json:"provider"`
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	Status       string `json:"status"`
+	Action       string `json:"action"`
+}
+
 type Provider struct {
 	ID            string    `json:"id"`
 	Name          string    `json:"name"`

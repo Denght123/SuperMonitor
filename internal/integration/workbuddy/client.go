@@ -47,6 +47,9 @@ type CreditResource struct {
 	Total, Remaining, Used float64
 	ExpiresAt              *time.Time
 }
+type CheckinStatus struct {
+	TodayCheckedIn bool
+}
 
 const (
 	resourceSummaryPath = "/billing/meter/get-user-resource-summary"
@@ -226,6 +229,90 @@ func (c *Client) FetchCredits(ctx context.Context, credential *Credential) (Cred
 	*credential = next
 	credits, _, err = c.fetchCreditsOnce(ctx, *credential)
 	return credits, true, err
+}
+
+func (c *Client) FetchCheckinStatus(ctx context.Context, credential *Credential) (CheckinStatus, bool, error) {
+	if credential.Variant != VariantCN {
+		return CheckinStatus{}, false, fmt.Errorf("该 WorkBuddy 档位没有签到活动")
+	}
+	status, unauthorized, err := c.fetchCheckinStatusOnce(ctx, *credential)
+	if err == nil {
+		return status, false, nil
+	}
+	if !unauthorized || credential.RefreshToken == "" {
+		return CheckinStatus{}, false, err
+	}
+	next, refreshErr := c.Refresh(ctx, *credential)
+	if refreshErr != nil {
+		return CheckinStatus{}, false, refreshErr
+	}
+	*credential = next
+	status, _, err = c.fetchCheckinStatusOnce(ctx, *credential)
+	return status, true, err
+}
+
+func (c *Client) fetchCheckinStatusOnce(ctx context.Context, credential Credential) (CheckinStatus, bool, error) {
+	origin := apiBase(credential)
+	var lastMessage string
+	for _, path := range []string{"/v2/billing/meter/checkin-activity-status", "/v2/billing/meter/checkin-status"} {
+		value, status, err := c.requestJSON(ctx, http.MethodPost, origin+path, map[string]any{}, resourceHeaders(credential, origin))
+		if err != nil {
+			return CheckinStatus{}, false, err
+		}
+		if isUnauthorized(status, value) {
+			return CheckinStatus{}, true, fmt.Errorf("WorkBuddy 登录已失效，请重新登录")
+		}
+		if status >= 200 && status < 300 && isSuccessResponse(value) {
+			data := childMap(value, "data")
+			checked, _ := firstBool(data, "today_checked_in", "todayCheckedIn")
+			return CheckinStatus{TodayCheckedIn: checked}, false, nil
+		}
+		lastMessage = responseMessage(value)
+	}
+	return CheckinStatus{}, false, fmt.Errorf("WorkBuddy 当前没有可用的签到活动: %s", lastMessage)
+}
+
+func (c *Client) Checkin(ctx context.Context, credential *Credential) (bool, bool, error) {
+	status, refreshed, err := c.FetchCheckinStatus(ctx, credential)
+	if err != nil {
+		return false, refreshed, err
+	}
+	if status.TodayCheckedIn {
+		return true, refreshed, nil
+	}
+	already, unauthorized, err := c.checkinOnce(ctx, *credential)
+	if err == nil {
+		return already, refreshed, nil
+	}
+	if !unauthorized || refreshed || credential.RefreshToken == "" {
+		return false, refreshed, err
+	}
+	next, refreshErr := c.Refresh(ctx, *credential)
+	if refreshErr != nil {
+		return false, refreshed, refreshErr
+	}
+	*credential = next
+	already, _, err = c.checkinOnce(ctx, *credential)
+	return already, true, err
+}
+
+func (c *Client) checkinOnce(ctx context.Context, credential Credential) (bool, bool, error) {
+	origin := apiBase(credential)
+	value, status, err := c.requestJSON(ctx, http.MethodPost, origin+"/v2/billing/meter/daily-checkin", map[string]any{}, resourceHeaders(credential, origin))
+	if err != nil {
+		return false, false, err
+	}
+	if isUnauthorized(status, value) {
+		return false, true, fmt.Errorf("WorkBuddy 登录已失效，请重新登录")
+	}
+	if status >= 200 && status < 300 && isSuccessResponse(value) {
+		return false, false, nil
+	}
+	message := responseMessage(value)
+	if strings.Contains(message, "已签到") || strings.Contains(strings.ToLower(message), "repeat") {
+		return true, false, nil
+	}
+	return false, false, fmt.Errorf("WorkBuddy 签到失败: %s", message)
 }
 
 func (c *Client) fetchCreditsOnce(ctx context.Context, credential Credential) (Credits, bool, error) {
@@ -554,6 +641,14 @@ func responseMessage(value map[string]any) string {
 		}
 	}
 	return "响应未提供错误详情"
+}
+func firstBool(object map[string]any, keys ...string) (bool, bool) {
+	for _, key := range keys {
+		if value, ok := object[key].(bool); ok {
+			return value, true
+		}
+	}
+	return false, false
 }
 func authHeaders(credential Credential, _ string) map[string]string {
 	headers := map[string]string{"Authorization": "Bearer " + credential.AccessToken}

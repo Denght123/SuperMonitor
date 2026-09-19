@@ -14,7 +14,10 @@ import (
 	"github.com/Denght123/SuperMonitor/internal/netutil"
 )
 
-const quotaURL = "https://open.bigmodel.cn/api/monitor/usage/quota/limit"
+const (
+	quotaURL  = "https://open.bigmodel.cn/api/monitor/usage/quota/limit"
+	modelsURL = "https://open.bigmodel.cn/api/paas/v4/models"
+)
 
 type Client struct{ http *http.Client }
 
@@ -31,8 +34,10 @@ type Window struct {
 }
 
 type Usage struct {
-	Plan    string
-	Windows []Window
+	Plan           string
+	Windows        []Window
+	ModelCount     int
+	QuotaAvailable bool
 }
 
 func NewClient() *Client { return &Client{http: netutil.NewHTTPClient(20 * time.Second)} }
@@ -58,16 +63,68 @@ func (c *Client) FetchUsage(ctx context.Context, credential Credential) (Usage, 
 	if err != nil {
 		return Usage{}, fmt.Errorf("读取智谱额度响应失败: %w", err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		usage, parseErr := parseUsage(body)
+		if parseErr == nil {
+			usage.QuotaAvailable = true
+			return usage, nil
+		}
+		if !isNoCodingPlan(parseErr) {
+			return Usage{}, parseErr
+		}
+	} else if !isNoCodingPlanBody(body) {
 		return Usage{}, fmt.Errorf("智谱额度接口返回 HTTP %d", resp.StatusCode)
 	}
-	return parseUsage(body)
+	return c.fetchModels(ctx, apiKey)
+}
+
+func (c *Client) fetchModels(ctx context.Context, apiKey string) (Usage, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
+	if err != nil {
+		return Usage{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return Usage{}, fmt.Errorf("连接智谱开放平台模型接口失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
+		return Usage{}, fmt.Errorf("读取智谱模型响应失败: %w", err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return Usage{}, fmt.Errorf("智谱 API Key 已失效或无权访问，请重新复制开放平台 API Key")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Usage{}, fmt.Errorf("智谱模型接口返回 HTTP %d", resp.StatusCode)
+	}
+	var payload struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return Usage{}, fmt.Errorf("智谱模型响应不是有效 JSON: %w", err)
+	}
+	return Usage{Plan: fmt.Sprintf("开放平台 API Key · %d 个可用模型", len(payload.Data)), ModelCount: len(payload.Data)}, nil
+}
+
+func isNoCodingPlan(err error) bool {
+	return err != nil && isNoCodingPlanText(err.Error())
+}
+
+func isNoCodingPlanBody(body []byte) bool { return isNoCodingPlanText(string(body)) }
+
+func isNoCodingPlanText(message string) bool {
+	message = strings.ToLower(message)
+	return strings.Contains(message, "不存在 coding plan") || strings.Contains(message, "not exist coding plan") || strings.Contains(message, "no coding plan")
 }
 
 func parseUsage(body []byte) (Usage, error) {
 	var payload struct {
 		Code    any    `json:"code"`
-		Message string `json:"msg"`
+		Message string `json:"message"`
+		Msg     string `json:"msg"`
 		Success *bool  `json:"success"`
 		Data    struct {
 			Level  string `json:"level"`
@@ -87,12 +144,16 @@ func parseUsage(body []byte) (Usage, error) {
 	if err := decoder.Decode(&payload); err != nil {
 		return Usage{}, fmt.Errorf("智谱额度响应不是有效 JSON: %w", err)
 	}
-	if payload.Success != nil && !*payload.Success {
+	code, hasCode := number(payload.Code)
+	if payload.Success != nil && !*payload.Success || hasCode && code != 0 && code != 200 {
 		message := strings.TrimSpace(payload.Message)
+		if message == "" {
+			message = strings.TrimSpace(payload.Msg)
+		}
 		if message == "" {
 			message = "认证或业务校验失败"
 		}
-		if code, _ := number(payload.Code); code == 401 {
+		if code == 401 {
 			return Usage{}, fmt.Errorf("智谱 API Key 已失效，请重新复制开放平台 API Key")
 		}
 		return Usage{}, fmt.Errorf("智谱额度接口返回业务错误: %s", message)

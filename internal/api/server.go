@@ -299,6 +299,30 @@ func New(deps Dependencies) http.Handler {
 			}
 			writeJSON(w, http.StatusOK, account)
 		})
+		api.Get("/activities", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Accounts == nil {
+				writeError(w, http.StatusServiceUnavailable, "activities_unavailable", "活动服务未启用")
+				return
+			}
+			activities, err := deps.Accounts.ListActivities(r.Context())
+			if err != nil {
+				writeError(w, http.StatusBadGateway, "activities_failed", "无法读取真实活动状态")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"items": activities})
+		})
+		api.Post("/activities/{accountID}/{activityID}", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Accounts == nil {
+				writeError(w, http.StatusServiceUnavailable, "activities_unavailable", "活动服务未启用")
+				return
+			}
+			activity, err := deps.Accounts.RunActivity(r.Context(), chi.URLParam(r, "accountID"), chi.URLParam(r, "activityID"))
+			if err != nil {
+				writeError(w, providerErrorStatus(err), "activity_failed", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, activity)
+		})
 		api.Get("/events", func(w http.ResponseWriter, r *http.Request) {
 			flusher, ok := w.(http.Flusher)
 			if !ok {

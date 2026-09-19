@@ -9,7 +9,7 @@ import {
   Bar, CartesianGrid, Cell, ComposedChart, Line, Pie, PieChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
-import { api, type AccountSummary, type Alert, type DeviceLoginSession, type Overview, type Provider, type QuotaSignal } from './api/client'
+import { api, type AccountSummary, type ActivityItem, type Alert, type DeviceLoginSession, type Overview, type Provider, type QuotaSignal } from './api/client'
 import { useOverview } from './hooks/useOverview'
 import { compactNumber, formatMetric, quotaValue, relativeTime } from './lib/format'
 import { ProviderLogo } from './components/ProviderLogo'
@@ -78,7 +78,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.6.0</small></div>
+        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.6.1</small></div>
       </aside>
 
       <main className="main-stage">
@@ -117,7 +117,7 @@ function PageContent({ page, data, onSelectAccount, onNavigate, onReload }: { pa
   if (page === 'overview') return <OverviewPage data={data} onSelectAccount={onSelectAccount} onNavigate={onNavigate} />
   if (page === 'accounts') return <AccountsPage accounts={data.accounts} onSelectAccount={onSelectAccount} onReload={onReload} />
   if (page === 'usage') return <UsagePage data={data} />
-  if (page === 'activities') return <ActivitiesPage accounts={data.accounts} />
+  if (page === 'activities') return <ActivitiesPage onReload={onReload} />
   if (page === 'alerts') return <AlertsPage alerts={data.alerts} />
   return <SettingsPage />
 }
@@ -298,7 +298,7 @@ function secretConfig(providerId: string) {
 		bailian: { title: '阿里云 RAM 只读 AccessKey', detail: '调用阿里云官方 BSS QueryAccountBalance。请使用专用 RAM 用户并授予 AliyunBSSReadOnlyAccess；这是阿里云账户级余额，不是虚构的 Token Plan 数据。', placeholder: 'AccessKey ID（LTAI...）', action: '验证并读取阿里云余额', emptyError: '请同时填写 AccessKey ID 与 AccessKey Secret' },
 		'coze-cn': { title: '扣子官网网页登录态', detail: '扣子目前没有面向额度监控的公开 OAuth scope；使用官网 Cookie 调用站点自身的 /credit/balance 接口读取积分。', placeholder: '粘贴 www.coze.cn 的完整 Cookie', action: '验证并读取扣子积分', emptyError: '请粘贴扣子官网 Cookie', multiline: true, loginUrl: 'https://www.coze.cn/' },
     deepseek: { title: 'DeepSeek API Key', detail: '调用官方 /user/balance 接口读取人民币账户余额。', placeholder: 'sk-...', action: '验证并读取余额', emptyError: '请输入 DeepSeek API Key' },
-    zhipu: { title: '智谱开放平台 API Key', detail: '自动调用 Coding Plan 额度接口，按真实字段展示积分或限额窗口。', placeholder: '粘贴 open.bigmodel.cn API Key', action: '验证并读取额度', emptyError: '请输入智谱 API Key' },
+    zhipu: { title: '智谱开放平台 API Key', detail: '优先读取 Coding Plan 额度；普通开放平台 Key 会通过官方模型接口验证并显示可用模型数量，不会伪造额度。', placeholder: '粘贴 open.bigmodel.cn API Key', action: '验证 API Key 并读取信息', emptyError: '请输入智谱 API Key' },
     mimo: { title: '小米 MiMo 控制台 Cookie', detail: '仅用于读取小米 MiMo Token Plan；与华为基元律动完全独立。平台未提供可用于额度读取的 OAuth，因此提供官方登录跳转与逐步获取教程。', placeholder: '在 platform.xiaomimimo.com 登录后复制请求 Cookie', action: '验证并读取 Token Plan', emptyError: '请粘贴小米 MiMo 控制台 Cookie', multiline: true, loginUrl: 'https://platform.xiaomimimo.com/' },
     tokenrhythm: { title: '基元律动网页登录态', detail: '华为基元律动 tokenrhythm.studio；支持 sess_ 会话令牌或 tr_session / tr_ref_device Cookie。与小米 MiMo 完全独立。', placeholder: 'sess_...\n或 tr_session=sess_...; tr_ref_device=...', action: '验证并读取人民币余额', emptyError: '请粘贴基元律动 sess_ 会话令牌或 Cookie', multiline: true, loginUrl: 'https://tokenrhythm.studio/' },
   }
@@ -306,7 +306,29 @@ function secretConfig(providerId: string) {
 }
 
 function UsagePage({ data }: { data: Overview }) { return <><KPIBand data={data} /><div className="chart-deck"><TokenChart data={data} /><ModelDonut data={data} /></div></> }
-function ActivitiesPage({ accounts }: { accounts: AccountSummary[] }) { const supported = accounts.filter((account) => account.services.some((service) => /Buddy/i.test(service))); return <section className="section-block"><div className="section-header"><div><h2>可执行活动</h2><p>真实活动接口验证完成后才开放批量签到。</p></div><button className="primary-button" disabled>全部签到</button></div>{supported.map((account) => <div className="activity-row" key={account.id}><div><Zap size={20} /><span><strong>{account.alias}</strong><small>{account.provider} · 等待真实活动适配器</small></span></div><button className="secondary-button" disabled>立即签到</button></div>)}</section> }
+function ActivitiesPage({ onReload }: { onReload: () => void }) {
+  const [items, setItems] = useState<ActivityItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [running, setRunning] = useState<string[]>([])
+  const [error, setError] = useState('')
+  const load = () => { setLoading(true); setError(''); void api.activities().then((payload) => setItems(payload.items)).catch((reason: Error) => setError(reason.message)).finally(() => setLoading(false)) }
+  useEffect(load, [])
+  const run = async (item: ActivityItem) => {
+    setRunning((current) => [...current, item.accountId]); setError('')
+    try {
+      const next = await api.runActivity(item.accountId, item.id)
+      setItems((current) => current.map((entry) => entry.accountId === item.accountId && entry.id === item.id ? next : entry))
+      onReload()
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '活动执行失败') }
+    finally { setRunning((current) => current.filter((id) => id !== item.accountId)) }
+  }
+  const available = items.filter((item) => item.status === 'available')
+  const runAll = async () => { for (const item of available) await run(item) }
+  return <section className="section-block"><div className="section-header"><div><h2>可执行活动</h2><p>只展示后端已通过官方接口确认存在的真实活动。</p></div><button className="primary-button" onClick={() => void runAll()} disabled={!available.length || running.length > 0}>{running.length ? <LoaderCircle className="spin" size={17} /> : <Zap size={17} />}全部签到</button></div>
+    {error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}
+    {loading ? <div className="activity-loading"><LoaderCircle className="spin" size={20} />正在读取平台活动状态</div> : items.length ? <div className="activity-grid">{items.map((item) => { const busy = running.includes(item.accountId); const completed = item.status === 'completed'; return <article className={`activity-card ${completed ? 'completed' : ''}`} key={`${item.accountId}-${item.id}`}><div className="activity-icon">{completed ? <Check size={20} /> : <Zap size={20} />}</div><div className="activity-copy"><span>{item.provider}</span><strong>{item.accountAlias} · {item.title}</strong><small>{item.description}</small></div><button className={completed ? 'secondary-button completed' : 'primary-button'} onClick={() => void run(item)} disabled={completed || busy}>{busy ? <LoaderCircle className="spin" size={17} /> : completed ? <Check size={17} /> : <Zap size={17} />}{completed ? '今日已完成' : '立即签到'}</button></article> })}</div> : <EmptyState title="当前账号池没有可执行活动" detail="Codex 等没有签到活动的平台不会出现在这里；接入支持活动的国内 WorkBuddy 账号后会自动显示。" />}
+  </section>
+}
 function AlertsPage({ alerts }: { alerts: Alert[] }) { return <section className="section-block alert-list"><div className="section-header"><div><h2>未解决告警</h2><p>同一故障自动去重，恢复后保留记录。</p></div></div>{alerts.map((alert) => <article key={alert.id} className={`alert-item severity-${alert.severity}`}><AlertTriangle size={22} /><div><span>{alert.provider} · {relativeTime(alert.createdAt)}</span><strong>{alert.title}</strong><p>{alert.message}</p><small>建议：{alert.recovery}</small></div></article>)}</section> }
 function SettingsPage() { return <div className="settings-grid"><SettingBlock icon={Sun} title="默认浅色主题" detail="可切换深色或跟随系统，选择会保存在浏览器。" /><SettingBlock icon={ShieldCheck} title="本机凭据保险箱" detail="AES-GCM 加密，密钥与数据库仅保存在部署机器。" /><SettingBlock icon={RefreshCw} title="额度轮询" detail="当前默认 10 分钟刷新，也可随时手动刷新。" /><SettingBlock icon={Database} title="数据隔离" detail="OAuth 文件、数据库、日志与备份均已加入忽略规则。" /></div> }
 function SettingBlock({ icon: Icon, title, detail }: { icon: typeof Settings; title: string; detail: string }) { return <article className="setting-block"><Icon size={24} /><span><strong>{title}</strong><small>{detail}</small></span></article> }

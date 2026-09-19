@@ -23,7 +23,7 @@ const (
 	deviceVerificationURL = "https://auth.openai.com/codex/device"
 	deviceRedirectURI     = "https://auth.openai.com/deviceauth/callback"
 	usageURL              = "https://chatgpt.com/backend-api/wham/usage"
-	userAgent             = "codex-cli/0.154.0 SuperMonitor/0.6.0"
+	userAgent             = "codex-cli/0.154.0 SuperMonitor/0.6.1"
 )
 
 type Client struct {
@@ -49,9 +49,10 @@ type QuotaWindow struct {
 }
 
 type Usage struct {
-	Plan    string
-	Windows []QuotaWindow
-	Credits *float64
+	Plan             string
+	Windows          []QuotaWindow
+	Credits          *float64
+	CreditsUnlimited bool
 }
 
 type DeviceChallenge struct {
@@ -141,6 +142,9 @@ func (c *Client) FetchUsage(ctx context.Context, credential *Credential) (Usage,
 	}
 	refreshed, refreshErr := c.Refresh(ctx, credential.RefreshToken)
 	if refreshErr != nil {
+		if isRotatedRefreshToken(refreshErr) {
+			return Usage{}, false, fmt.Errorf("该认证文件是已被刷新过的旧快照，refresh token 已轮换，不能重复导入。请从正在运行的 CPA 导出最新凭据，或使用 OpenAI 官方设备登录")
+		}
 		return Usage{}, false, fmt.Errorf("Codex access_token 已被额度接口拒绝（%s）；refresh_token 也无法刷新，请使用设备登录重新授权。刷新详情: %s", compactError(err), compactError(refreshErr))
 	}
 	if refreshed.Email == "" {
@@ -397,7 +401,10 @@ func parseUsage(body []byte) (Usage, error) {
 		usage.Windows = append(usage.Windows, QuotaWindow{Label: windowLabel(seconds, entry.fallback), UsedPercent: used, RemainingPercent: clamp(100 - used), WindowSeconds: seconds, ResetAt: resetAt})
 	}
 	if credits, ok := root["credits"].(map[string]any); ok {
-		if balance, ok := floatValue(credits["balance"]); ok {
+		hasCredits, hasFlag := boolValue(credits["has_credits"])
+		unlimited, _ := boolValue(credits["unlimited"])
+		usage.CreditsUnlimited = hasCredits && unlimited
+		if balance, ok := floatValue(credits["balance"]); ok && !unlimited && (hasCredits || !hasFlag && balance > 0) {
 			usage.Credits = &balance
 		}
 	}
@@ -405,6 +412,29 @@ func parseUsage(body []byte) (Usage, error) {
 		return Usage{}, fmt.Errorf("Codex 额度响应缺少可识别的额度窗口")
 	}
 	return usage, nil
+}
+
+func isRotatedRefreshToken(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "refresh_token_reused") || strings.Contains(message, "invalid_refresh_token") || strings.Contains(message, "invalid refresh token")
+}
+
+func boolValue(value any) (bool, bool) {
+	switch item := value.(type) {
+	case bool:
+		return item, true
+	case string:
+		if strings.EqualFold(strings.TrimSpace(item), "true") {
+			return true, true
+		}
+		if strings.EqualFold(strings.TrimSpace(item), "false") {
+			return false, true
+		}
+	}
+	return false, false
 }
 
 func windowLabel(seconds int64, fallback string) string {
