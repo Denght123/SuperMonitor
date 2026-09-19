@@ -59,6 +59,21 @@ func TestMergeResourcesPrefersPaidAndFreeDetails(t *testing.T) {
 	}
 }
 
+func TestDedupeResourcesOnlyRemovesExactDuplicates(t *testing.T) {
+	expiryA := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	expiryB := expiryA.Add(time.Second)
+	resources := []CreditResource{
+		{Code: "bonus", Name: "拉新权益包", Total: 6, Remaining: 6, ExpiresAt: &expiryA},
+		{Code: "bonus", Name: "拉新权益包", Total: 6, Remaining: 6, ExpiresAt: &expiryA},
+		{Code: "bonus", Name: "拉新权益包", Total: 6, Remaining: 6, ExpiresAt: &expiryB},
+		{Code: "bonus", Name: "拉新权益包", Total: 66, Remaining: 66, ExpiresAt: &expiryA},
+	}
+	result := dedupeResources(resources)
+	if len(result) != 3 {
+		t.Fatalf("expected only exact duplicates to be removed, got %+v", result)
+	}
+}
+
 func TestResolveExpiryPrefersCycleOverFarPlaceholder(t *testing.T) {
 	now := time.Date(2026, 9, 18, 0, 0, 0, 0, time.Local)
 	resource := map[string]any{"DeductionEndTime": "2049-12-31 23:59:59", "CycleEndTime": "2026-09-30 23:59:59"}

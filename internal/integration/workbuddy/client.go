@@ -364,7 +364,7 @@ func (c *Client) fetchDomesticCredits(ctx context.Context, credential Credential
 	if !recognized {
 		return Credits{}, false, false, nil
 	}
-	return summarizeResources(mergeResources(summary, details)), true, false, nil
+	return summarizeResources(dedupeResources(mergeResources(summary, details))), true, false, nil
 }
 
 func (c *Client) fetchLegacyCredits(ctx context.Context, credential Credential) (Credits, bool, error) {
@@ -390,7 +390,7 @@ func (c *Client) fetchLegacyCredits(ctx context.Context, credential Credential) 
 	if !present {
 		return Credits{}, false, fmt.Errorf("WorkBuddy 积分响应缺少 Accounts")
 	}
-	return summarizeResources(normalizeResources(items, time.Now().UTC())), false, nil
+	return summarizeResources(dedupeResources(normalizeResources(items, time.Now().UTC()))), false, nil
 }
 
 func (c *Client) requestResource(ctx context.Context, credential Credential, paths []string, body map[string]any) (map[string]any, int, error) {
@@ -560,6 +560,24 @@ func mergeResources(summary, details []CreditResource) []CreditResource {
 		if item.Code == "" || !codes[item.Code] {
 			result = append(result, item)
 		}
+	}
+	return result
+}
+
+func dedupeResources(resources []CreditResource) []CreditResource {
+	seen := make(map[string]bool, len(resources))
+	result := make([]CreditResource, 0, len(resources))
+	for _, resource := range resources {
+		expires := ""
+		if resource.ExpiresAt != nil {
+			expires = resource.ExpiresAt.UTC().Format(time.RFC3339Nano)
+		}
+		key := fmt.Sprintf("%s\x00%s\x00%.9f\x00%.9f\x00%.9f\x00%s", resource.Code, resource.Name, resource.Total, resource.Remaining, resource.Used, expires)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, resource)
 	}
 	return result
 }

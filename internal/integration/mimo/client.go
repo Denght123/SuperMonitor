@@ -112,7 +112,7 @@ func (c *Client) fetch(ctx context.Context, url, cookie string) (map[string]any,
 	req.Header.Set("Origin", "https://platform.xiaomimimo.com")
 	req.Header.Set("Referer", "https://platform.xiaomimimo.com/#/console/balance")
 	req.Header.Set("x-timeZone", "Asia/Shanghai")
-	req.Header.Set("User-Agent", "Mozilla/5.0 SuperMonitor/0.6.1")
+	req.Header.Set("User-Agent", "Mozilla/5.0 SuperMonitor/0.6.2")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("MiMo usage 请求失败: %w", err)

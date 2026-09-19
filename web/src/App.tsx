@@ -78,7 +78,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.6.1</small></div>
+        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.6.2</small></div>
       </aside>
 
       <main className="main-stage">
@@ -104,7 +104,7 @@ export function App() {
 
         <div className="page-surface" key={page}>
           {loading || !data ? <DashboardSkeleton /> : (
-            <PageContent page={page} data={data} onSelectAccount={setSelectedAccount} onNavigate={changePage} onReload={() => void retry(true)} />
+            <PageContent page={page} data={data} onSelectAccount={setSelectedAccount} onReload={() => void retry(true)} />
           )}
         </div>
       </main>
@@ -113,8 +113,8 @@ export function App() {
   )
 }
 
-function PageContent({ page, data, onSelectAccount, onNavigate, onReload }: { page: Page; data: Overview; onSelectAccount: (account: AccountSummary) => void; onNavigate: (page: Page) => void; onReload: () => void }) {
-  if (page === 'overview') return <OverviewPage data={data} onSelectAccount={onSelectAccount} onNavigate={onNavigate} />
+function PageContent({ page, data, onSelectAccount, onReload }: { page: Page; data: Overview; onSelectAccount: (account: AccountSummary) => void; onReload: () => void }) {
+  if (page === 'overview') return <OverviewPage data={data} onSelectAccount={onSelectAccount} />
   if (page === 'accounts') return <AccountsPage accounts={data.accounts} onSelectAccount={onSelectAccount} onReload={onReload} />
   if (page === 'usage') return <UsagePage data={data} />
   if (page === 'activities') return <ActivitiesPage onReload={onReload} />
@@ -122,17 +122,13 @@ function PageContent({ page, data, onSelectAccount, onNavigate, onReload }: { pa
   return <SettingsPage />
 }
 
-function OverviewPage({ data, onSelectAccount, onNavigate }: { data: Overview; onSelectAccount: (account: AccountSummary) => void; onNavigate: (page: Page) => void }) {
+function OverviewPage({ data, onSelectAccount }: { data: Overview; onSelectAccount: (account: AccountSummary) => void }) {
   return <>
     <KPIBand data={data} />
     <div className="chart-deck"><TokenChart data={data} /><ModelDonut data={data} /></div>
     <section className="section-block">
       <div className="section-header"><div><h2>额度窗口</h2><p>颜色按剩余比例变化，时间为平台返回的精确重置或到期时间。</p></div></div>
-      {data.quotaSignals.length ? <QuotaGroups signals={data.quotaSignals} /> : <EmptyState title="暂无真实额度" detail="连接账号后，这里会显示平台返回的余额、积分或限额窗口。" />}
-    </section>
-    <section className="section-block">
-      <div className="section-header"><div><h2>账号信号</h2><p>只展示已经完成认证并成功读取额度的本地账号。</p></div><button className="text-button" onClick={() => onNavigate('accounts')}>管理账号池 <ChevronRight size={17} /></button></div>
-      <ProviderAccountSections accounts={data.accounts.slice(0, 8)} onSelectAccount={onSelectAccount} />
+      {data.accounts.length ? <AccountQuotaGroups accounts={data.accounts} onSelectAccount={onSelectAccount} /> : <EmptyState title="暂无真实额度" detail="连接账号后，这里会按账号显示平台返回的余额、积分或限额窗口。" />}
     </section>
   </>
 }
@@ -170,18 +166,39 @@ function QuotaProgress({ signal }: { signal: QuotaSignal }) {
   </article>
 }
 
-function QuotaGroups({ signals }: { signals: QuotaSignal[] }) {
+function AccountQuotaGroups({ accounts, onSelectAccount }: { accounts: AccountSummary[]; onSelectAccount: (account: AccountSummary) => void }) {
   const groups = useMemo(() => {
-    const result = new Map<string, QuotaSignal[]>()
-    signals.forEach((signal) => result.set(signal.provider, [...(result.get(signal.provider) ?? []), signal]))
+    const result = new Map<string, AccountSummary[]>()
+    accounts.forEach((account) => result.set(account.providerId, [...(result.get(account.providerId) ?? []), account]))
     return [...result.entries()]
-  }, [signals])
-  return <div className="quota-groups">{groups.map(([provider, items]) => <section className="quota-provider-group" key={provider}><div className="quota-provider-heading"><span>{provider}</span><small>{items.length} 个额度窗口</small></div><div className="quota-card-grid">{items.map((signal, index) => <QuotaProgress key={`${signal.id}-${index}`} signal={signal} />)}</div></section>)}</div>
+  }, [accounts])
+  return <div className="quota-groups">{groups.map(([providerId, items]) => <section className="quota-provider-group" key={providerId}><div className="quota-provider-heading"><div className="provider-section-title"><ProviderLogo providerId={providerId} name={items[0].provider} /><span><strong>{items[0].provider}</strong><small>{items.length} 个账号</small></span></div><small>按账号独立显示</small></div><div className="quota-account-grid">{items.map((account) => <AccountQuotaCard key={account.id} account={account} onSelect={() => onSelectAccount(account)} />)}</div></section>)}</div>
+}
+
+function AccountQuotaCard({ account, onSelect }: { account: AccountSummary; onSelect: () => void }) {
+  const isWorkBuddy = account.providerId === 'workbuddy-cn' || account.providerId === 'workbuddy-global'
+  const signals = isWorkBuddy ? account.quotaWindows.slice(0, 1) : account.quotaWindows
+  const hiddenPackages = Math.max(0, account.quotaWindows.length - signals.length)
+  return <button className={`quota-account-card status-${account.status}`} onClick={onSelect}>
+    <div className="quota-account-identity"><span className="provider-chip">{providerShortName(account.providerId)}</span><strong>{account.email || account.alias}</strong><ChevronRight size={17} /></div>
+    <div className="quota-account-plan"><span>套餐</span><b>{planLabel(account.plan)}</b></div>
+    <div className="quota-account-signals">{signals.length ? signals.map((signal) => <AccountQuotaLine key={signal.id} signal={signal} />) : <div className="metric-summary"><strong>{account.primaryMetric}</strong><span>{account.secondaryMetric}</span></div>}</div>
+    {hiddenPackages ? <span className="package-summary">总积分已包含 {hiddenPackages} 个官方积分包，点击查看明细</span> : null}
+    <div className="quota-account-foot"><span>更新于 {relativeTime(account.lastRefreshedAt)}</span><span>{authMethodLabel(account.authMethod)}</span></div>
+  </button>
+}
+
+function AccountQuotaLine({ signal }: { signal: QuotaSignal }) {
+  const percent = signal.remainingPercent ?? (signal.total ? signal.value / signal.total * 100 : undefined)
+  const tone = percent === undefined ? signal.status : percent <= 15 ? 'critical' : percent <= 35 ? 'warning' : 'healthy'
+  const deadline = signal.resetAt ?? signal.expiresAt
+  const displayValue = signal.kind === 'rate_window' && percent !== undefined ? `${Math.round(percent)}%` : quotaValue(signal.value, signal.unit)
+  return <div className={`account-quota-line tone-${tone}`}><div><strong>{signal.label}</strong><span>{displayValue}</span>{deadline ? <time>{formatCompactDate(deadline)}</time> : null}</div>{percent !== undefined ? <div className="progress-track" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}><span style={{ transform: `scaleX(${Math.max(1, Math.min(100, percent)) / 100})` }} /></div> : null}</div>
 }
 
 function AccountGrid({ accounts, onSelectAccount }: { accounts: AccountSummary[]; onSelectAccount: (account: AccountSummary) => void }) {
   if (!accounts.length) return <EmptyState title="还没有账号" detail="从下方平台列表添加你的第一个账号。" />
-  return <div className="account-grid">{accounts.map((account) => <button className={`account-card status-${account.status}`} key={account.id} onClick={() => onSelectAccount(account)}><div className="account-card-head"><ProviderLogo providerId={account.providerId} name={account.provider} /><div><strong>{account.alias}</strong><span>{account.email || `${account.region} · ${account.plan || account.services[0]}`}</span></div><ChevronRight size={18} /></div><div className="account-tags"><em>{authMethodLabel(account.authMethod)}</em><em className="live">实时</em></div>{account.quotaWindows.length ? <div className="account-windows">{account.quotaWindows.slice(0, 3).map((signal) => <QuotaProgress key={signal.id} signal={signal} />)}{account.quotaWindows.length > 3 ? <span className="more-windows">另有 {account.quotaWindows.length - 3} 个额度窗口，点击查看</span> : null}</div> : <div className="metric-summary"><strong>{account.primaryMetric}</strong><span>{account.secondaryMetric}</span></div>}<div className="account-card-foot"><span>更新于 {relativeTime(account.lastRefreshedAt)}</span><span>{account.source}</span></div>{account.error ? <div className="inline-fault"><AlertTriangle size={16} />{account.error}</div> : null}</button>)}</div>
+  return <div className="account-grid">{accounts.map((account) => <AccountQuotaCard key={account.id} account={account} onSelect={() => onSelectAccount(account)} />)}</div>
 }
 
 function ProviderAccountSections({ accounts, onSelectAccount }: { accounts: AccountSummary[]; onSelectAccount: (account: AccountSummary) => void }) {
@@ -339,11 +356,17 @@ function AccountDrawer({ account, onClose, onReload }: { account: AccountSummary
   const [error, setError] = useState('')
   useEffect(() => { const listener = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }; window.addEventListener('keydown', listener); ref.current?.focus(); return () => window.removeEventListener('keydown', listener) }, [onClose])
   const refreshAccount = async () => { setRefreshing(true); setError(''); try { await api.refreshAccount(account.id); onReload(); onClose() } catch (reason) { setError(reason instanceof Error ? reason.message : '刷新失败'); setRefreshing(false) } }
-  return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><aside className="account-drawer" ref={ref} tabIndex={-1}><header><div><span>实时账号</span><h2>{account.alias}</h2><p>{account.email || account.provider} · {account.plan || account.region}</p></div><button className="close-button" onClick={onClose}><X size={22} /></button></header><div className="drawer-content"><div className="detail-row"><span>认证方式</span><strong>{authMethodLabel(account.authMethod)}</strong></div><div className="detail-row"><span>数据来源</span><strong>{account.source}</strong></div><div className="detail-row"><span>最近刷新</span><strong>{formatDateTime(account.lastRefreshedAt)}</strong></div><div className="drawer-quotas">{account.quotaWindows.length ? account.quotaWindows.map((signal) => <QuotaProgress key={signal.id} signal={signal} />) : <EmptyState title={account.primaryMetric} detail={account.secondaryMetric} />}</div>{error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}</div><footer><button className="primary-button" onClick={() => void refreshAccount()} disabled={refreshing}>{refreshing ? <LoaderCircle className="spin" size={18} /> : <RefreshCw size={18} />}立即读取真实额度</button></footer></aside></div>
+  const isWorkBuddy = account.providerId === 'workbuddy-cn' || account.providerId === 'workbuddy-global'
+  const mainSignals = isWorkBuddy ? account.quotaWindows.slice(0, 1) : account.quotaWindows
+  const packageSignals = isWorkBuddy ? account.quotaWindows.slice(1) : []
+  return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><aside className="account-drawer" ref={ref} tabIndex={-1}><header><div><span>实时账号</span><h2>{account.alias}</h2><p>{account.email || account.provider} · {planLabel(account.plan || account.region)}</p></div><button className="close-button" onClick={onClose}><X size={22} /></button></header><div className="drawer-content"><div className="detail-row"><span>认证方式</span><strong>{authMethodLabel(account.authMethod)}</strong></div><div className="detail-row"><span>数据来源</span><strong>{account.source}</strong></div><div className="detail-row"><span>最近刷新</span><strong>{formatDateTime(account.lastRefreshedAt)}</strong></div><div className="drawer-quotas">{mainSignals.length ? mainSignals.map((signal) => <QuotaProgress key={signal.id} signal={signal} />) : <EmptyState title={account.primaryMetric} detail={account.secondaryMetric} />}</div>{packageSignals.length ? <details className="package-details"><summary><span>官方积分包明细</span><b>{packageSignals.length} 个</b></summary><p>这些积分包来自官方 Billing 返回，金额已计入上方总积分，不会再次累加。</p><div>{packageSignals.map((signal) => <div className="package-row" key={signal.id}><span><strong>{signal.label}</strong><small>{signal.expiresAt ? `${formatCompactDate(signal.expiresAt)} 到期` : '未返回到期时间'}</small></span><b>{quotaValue(signal.value, signal.unit)}</b></div>)}</div></details> : null}{error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}</div><footer><button className="primary-button" onClick={() => void refreshAccount()} disabled={refreshing}>{refreshing ? <LoaderCircle className="spin" size={18} /> : <RefreshCw size={18} />}立即读取真实额度</button></footer></aside></div>
 }
 
 function EmptyState({ title, detail }: { title: string; detail: string }) { return <div className="empty-state"><Boxes size={28} /><strong>{title}</strong><span>{detail}</span></div> }
 function DashboardSkeleton() { return <div className="skeleton-grid">{Array.from({ length: 8 }).map((_, index) => <i key={index} />)}</div> }
 function formatDateTime(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
+function formatCompactDate(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
+function providerShortName(providerId: string) { return ({ codex: 'Codex', 'workbuddy-cn': 'WorkBuddy CN', 'workbuddy-global': 'WorkBuddy', tokenrhythm: 'TokenRhythm', zhipu: '智谱 AI', deepseek: 'DeepSeek' } as Record<string, string>)[providerId] ?? providerId }
+function planLabel(value?: string) { if (!value) return '未标注'; return value.toLowerCase() === 'plus' ? 'Plus' : value.toLowerCase() === 'pro' ? 'Pro' : value }
 function capabilityLabel(value: string) { return ({ quota: '额度', usage: '用量', credits: '积分', balance: '余额', token_plan: 'Token Plan', checkin: '签到' } as Record<string, string>)[value] ?? value }
 function authMethodLabel(value?: string) { return ({ credential_import: '认证文件导入', device_code: '官方设备登录', oauth: '官方网页登录', oauth_qr: '官方二维码登录', api_key: 'API Key', access_key: 'RAM AccessKey', cookie: '控制台 Cookie', session_token: '网页登录态' } as Record<string, string>)[value ?? ''] ?? (value || '未记录') }

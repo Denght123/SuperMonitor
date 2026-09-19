@@ -2,6 +2,19 @@
 
 All notable changes to SuperMonitor are documented here.
 
+## [0.6.2] - 2026-09-19
+
+### Changed
+
+- Rebuilt quota presentation around one account card per identity, matching CPA-style account separation while preserving the existing SuperMonitor visual language.
+- Codex cards now show account email, normalized plan name, five-hour quota, weekly quota, reset times, and authentication method together.
+- WorkBuddy cards now show only the official account-level credit total in overview and account-pool surfaces; package-level grants move into a compact expandable detail list.
+
+### Fixed
+
+- Added exact-response deduplication for WorkBuddy Billing resources without collapsing legitimate grants that share a package code but have different amounts or expiry times.
+- Clarified that small WorkBuddy activity grants are included in the displayed total and are not counted again when their detail list is expanded.
+
 ## [0.6.1] - 2026-09-19
 
 ### Added
