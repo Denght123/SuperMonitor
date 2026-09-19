@@ -464,6 +464,43 @@ func (s *Store) ConnectedAccount(ctx context.Context, id string) (domain.Connect
 	return account, encrypted, err
 }
 
+// DeleteConnectedAccount removes one connected account and all locally stored
+// credential and quota data in a single transaction. Child rows are deleted
+// explicitly so the behavior remains deterministic even for databases created
+// before foreign key enforcement was enabled.
+func (s *Store) DeleteConnectedAccount(ctx context.Context, id string) (domain.ConnectedAccount, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.ConnectedAccount{}, err
+	}
+	defer tx.Rollback()
+
+	var account domain.ConnectedAccount
+	err = tx.QueryRowContext(ctx, `SELECT id, provider_id, alias FROM connected_accounts WHERE id=?`, strings.TrimSpace(id)).Scan(
+		&account.ID, &account.ProviderID, &account.Alias,
+	)
+	if err != nil {
+		return domain.ConnectedAccount{}, err
+	}
+	for _, statement := range []string{
+		"DELETE FROM alerts WHERE id IN (SELECT alert_id FROM notification_events WHERE account_id=?)",
+		"DELETE FROM notification_deliveries WHERE dedupe_key IN (SELECT dedupe_key FROM notification_events WHERE account_id=?)",
+		"DELETE FROM notification_states WHERE account_id=?",
+		"DELETE FROM notification_events WHERE account_id=?",
+		"DELETE FROM account_quota_windows WHERE account_id=?",
+		"DELETE FROM account_credentials WHERE account_id=?",
+		"DELETE FROM connected_accounts WHERE id=?",
+	} {
+		if _, err = tx.ExecContext(ctx, statement, account.ID); err != nil {
+			return domain.ConnectedAccount{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.ConnectedAccount{}, err
+	}
+	return account, nil
+}
+
 func (s *Store) connectedQuotaWindows(ctx context.Context, accountID, providerName string) ([]domain.QuotaSignal, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, label, kind, value, total, unit, remaining_percent,
 		window_seconds, reset_at, expires_at, status, source FROM account_quota_windows WHERE account_id=? ORDER BY rowid`, accountID)
@@ -529,7 +566,7 @@ func (s *Store) EnsureProviderCatalog(ctx context.Context) error {
 		{"mimo", "小米 MiMo", "CN", "community", "healthy", []string{"cookie"}, []string{"token_plan"}},
 		{"tokenrhythm", "基元律动 TokenRhythm", "CN", "community", "healthy", []string{"session_token"}, []string{"balance", "usage"}},
 		{"deepseek", "DeepSeek", "CN", "official", "healthy", []string{"api_key"}, []string{"balance"}},
-		{"zhipu", "智谱 AI", "CN", "community", "healthy", []string{"api_key"}, []string{"credits", "quota"}},
+		{"zhipu", "智谱 AI", "CN", "community", "healthy", []string{"api_key"}, []string{"credits", "quota", "balance"}},
 		{"codex", "Codex", "Global", "community", "healthy", []string{"device_code", "credential_import"}, []string{"quota"}},
 		{"gemini-cli", "Gemini", "Global", "community", "healthy", []string{"credential_import"}, []string{"quota", "usage"}},
 		{"claude-code", "Claude Code", "Global", "community", "healthy", []string{"credential_import"}, []string{"quota", "usage"}},
@@ -564,7 +601,7 @@ func providerPresentation(id string) (string, string, bool) {
 		"deepseek":     "账户余额与 API Token 用量。",
 		"mimo":         "小米 MiMo Token Plan 月度额度与周期。",
 		"tokenrhythm":  "基元律动人民币余额、用量和余额到期时间。",
-		"zhipu":        "优先读取 Coding Plan 额度；普通开放平台 API Key 通过官方模型接口验证，不伪造余额或额度。",
+		"zhipu":        "优先读取 Coding Plan 额度；普通开放平台 API Key 读取官方人民币可用余额，余额接口不可用时再验证模型访问。",
 		"gemini-cli":   "导入 Gemini CLI oauth_creds.json 读取模型额度。",
 		"claude-code":  "导入 Claude Code .credentials.json 读取订阅额度窗口。",
 		"cursor":       "Cursor 官方网页登录，读取当前订阅周期剩余额度和重置时间。",

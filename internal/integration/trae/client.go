@@ -280,7 +280,7 @@ func (c *Client) loginGuidance(ctx context.Context, traceID string) string {
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "Trae/1.0.0 SuperMonitor/0.6.2")
+		req.Header.Set("User-Agent", "Trae/1.0.0 SuperMonitor/0.7.0")
 		resp, err := c.http.Do(req)
 		if err != nil {
 			cancel()
@@ -361,7 +361,7 @@ func (c *Client) exchangeAuthCode(ctx context.Context, state *loginState, authCo
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json")
-		req.Header.Set("User-Agent", "Trae/1.0.0 SuperMonitor/0.6.2")
+		req.Header.Set("User-Agent", "Trae/1.0.0 SuperMonitor/0.7.0")
 		resp, err := c.http.Do(req)
 		if err != nil {
 			failures = append(failures, err.Error())
@@ -627,7 +627,7 @@ func (c *Client) Refresh(ctx context.Context, credential Credential) (Credential
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json")
-		req.Header.Set("User-Agent", "Trae/"+ideVersion+" SuperMonitor/0.6.2")
+		req.Header.Set("User-Agent", "Trae/"+ideVersion+" SuperMonitor/0.7.0")
 		resp, err := c.http.Do(req)
 		if err != nil {
 			failures = append(failures, err.Error())

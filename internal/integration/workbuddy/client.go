@@ -264,7 +264,11 @@ func (c *Client) fetchCheckinStatusOnce(ctx context.Context, credential Credenti
 		}
 		if status >= 200 && status < 300 && isSuccessResponse(value) {
 			data := childMap(value, "data")
-			checked, _ := firstBool(data, "today_checked_in", "todayCheckedIn")
+			checked, found := firstBool(data, "today_checked_in", "todayCheckedIn")
+			if !found {
+				lastMessage = "响应缺少 todayCheckedIn 签到状态"
+				continue
+			}
 			return CheckinStatus{TodayCheckedIn: checked}, false, nil
 		}
 		lastMessage = responseMessage(value)
@@ -305,14 +309,44 @@ func (c *Client) checkinOnce(ctx context.Context, credential Credential) (bool, 
 	if isUnauthorized(status, value) {
 		return false, true, fmt.Errorf("WorkBuddy 登录已失效，请重新登录")
 	}
-	if status >= 200 && status < 300 && isSuccessResponse(value) {
-		return false, false, nil
-	}
 	message := responseMessage(value)
 	if strings.Contains(message, "已签到") || strings.Contains(strings.ToLower(message), "repeat") {
 		return true, false, nil
 	}
+	if status >= 200 && status < 300 {
+		if hasExplicitCheckinSuccess(value) {
+			return false, false, nil
+		}
+
+		// Some gateways reply HTTP 200 with a generic data envelope even when the
+		// check-in action was not applied. A data field alone is therefore not a
+		// success signal: verify the official status before reporting completion.
+		confirmed, unauthorized, verifyErr := c.fetchCheckinStatusOnce(ctx, credential)
+		if verifyErr != nil {
+			return false, unauthorized, fmt.Errorf("WorkBuddy 签到响应缺少明确成功信号，且状态复核失败: %w", verifyErr)
+		}
+		if confirmed.TodayCheckedIn {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("WorkBuddy 签到未确认成功：官方状态仍显示今日未签到")
+	}
 	return false, false, fmt.Errorf("WorkBuddy 签到失败: %s", message)
+}
+
+func hasExplicitCheckinSuccess(value map[string]any) bool {
+	code := responseCode(value)
+	if code != -1 {
+		return code == 0 || code == 200
+	}
+	if success, ok := value["success"].(bool); ok && success {
+		return true
+	}
+	if ok, found := value["ok"].(bool); found && ok {
+		return true
+	}
+	data := childMap(value, "data")
+	checked, found := firstBool(data, "today_checked_in", "todayCheckedIn")
+	return found && checked
 }
 
 func (c *Client) fetchCreditsOnce(ctx context.Context, credential Credential) (Credits, bool, error) {

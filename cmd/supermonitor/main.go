@@ -59,14 +59,19 @@ func main() {
 	hub := service.NewEventHub()
 	accounts := service.NewAccounts(store, vault, hub)
 	dashboard := service.NewDashboard(store, hub, accounts, cfg.Environment)
+	notifications := service.NewNotifications(store, vault, accounts, hub, logger)
 	handler := api.New(api.Dependencies{
-		Dashboard: dashboard,
-		Accounts:  accounts,
-		Events:    hub,
-		Web:       webui.Handler(),
-		Logger:    logger,
-		Version:   version,
+		Dashboard:     dashboard,
+		Accounts:      accounts,
+		Notifications: notifications,
+		Events:        hub,
+		Web:           webui.Handler(),
+		Logger:        logger,
+		Version:       version,
 	})
+	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
+	defer stopScheduler()
+	go notifications.RunScheduler(schedulerCtx)
 
 	server := &http.Server{
 		Addr:              cfg.Listen,
@@ -94,6 +99,7 @@ func main() {
 			logger.Error("server stopped", "error", err)
 		}
 	}
+	stopScheduler()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

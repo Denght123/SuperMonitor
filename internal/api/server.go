@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -22,12 +23,13 @@ type dashboardService interface {
 }
 
 type Dependencies struct {
-	Dashboard *service.Dashboard
-	Accounts  *service.Accounts
-	Events    *service.EventHub
-	Web       http.Handler
-	Logger    *slog.Logger
-	Version   string
+	Dashboard     *service.Dashboard
+	Accounts      *service.Accounts
+	Notifications *service.Notifications
+	Events        *service.EventHub
+	Web           http.Handler
+	Logger        *slog.Logger
+	Version       string
 }
 
 func New(deps Dependencies) http.Handler {
@@ -299,17 +301,124 @@ func New(deps Dependencies) http.Handler {
 			}
 			writeJSON(w, http.StatusOK, account)
 		})
+		api.Delete("/accounts/{accountID}", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Accounts == nil {
+				writeError(w, http.StatusServiceUnavailable, "accounts_unavailable", "账号服务未启用")
+				return
+			}
+			if err := deps.Accounts.Delete(r.Context(), chi.URLParam(r, "accountID")); err != nil {
+				if errors.Is(err, service.ErrAccountNotFound) {
+					writeError(w, http.StatusNotFound, "account_not_found", "账号不存在或已删除")
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "account_delete_failed", "无法删除账号")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+		api.Get("/notifications/channels", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Notifications == nil {
+				writeError(w, http.StatusServiceUnavailable, "notifications_unavailable", "通知服务未启用")
+				return
+			}
+			channels, err := deps.Notifications.Channels(r.Context())
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "notification_channels_failed", "无法读取通知渠道")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"items": channels})
+		})
+		api.Get("/notifications/policy", func(w http.ResponseWriter, _ *http.Request) {
+			if deps.Notifications == nil {
+				writeError(w, http.StatusServiceUnavailable, "notifications_unavailable", "通知服务未启用")
+				return
+			}
+			writeJSON(w, http.StatusOK, deps.Notifications.Policy())
+		})
+		api.Post("/notifications/channels", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Notifications == nil {
+				writeError(w, http.StatusServiceUnavailable, "notifications_unavailable", "通知服务未启用")
+				return
+			}
+			var input service.NotificationChannelInput
+			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&input); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_notification_channel", "通知渠道配置格式无效")
+				return
+			}
+			channel, err := deps.Notifications.CreateChannel(r.Context(), input)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "notification_channel_invalid", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusCreated, channel)
+		})
+		api.Delete("/notifications/channels/{channelID}", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Notifications == nil {
+				writeError(w, http.StatusServiceUnavailable, "notifications_unavailable", "通知服务未启用")
+				return
+			}
+			if err := deps.Notifications.DeleteChannel(r.Context(), chi.URLParam(r, "channelID")); err != nil {
+				if errors.Is(err, service.ErrNotificationChannelNotFound) {
+					writeError(w, http.StatusNotFound, "notification_channel_not_found", "通知渠道不存在或已删除")
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "notification_channel_delete_failed", "无法删除通知渠道")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+		api.Post("/notifications/channels/{channelID}/test", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Notifications == nil {
+				writeError(w, http.StatusServiceUnavailable, "notifications_unavailable", "通知服务未启用")
+				return
+			}
+			if err := deps.Notifications.TestChannel(r.Context(), chi.URLParam(r, "channelID")); err != nil {
+				if errors.Is(err, service.ErrNotificationChannelNotFound) {
+					writeError(w, http.StatusNotFound, "notification_channel_not_found", "通知渠道不存在或已删除")
+					return
+				}
+				writeError(w, http.StatusBadGateway, "notification_test_failed", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "sent", "message": "测试通知已发送"})
+		})
+		api.Post("/notifications/evaluate", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Notifications == nil {
+				writeError(w, http.StatusServiceUnavailable, "notifications_unavailable", "通知服务未启用")
+				return
+			}
+			result, err := deps.Notifications.Evaluate(r.Context())
+			if errors.Is(err, service.ErrNotificationEvaluationBusy) {
+				writeError(w, http.StatusConflict, "notification_evaluation_busy", "告警与活动扫描正在执行")
+				return
+			}
+			if err != nil {
+				deps.Logger.Warn("manual notification evaluation completed with errors", "error", err)
+				writeJSON(w, http.StatusBadGateway, map[string]any{
+					"error":  map[string]string{"code": "notification_evaluation_failed", "message": "扫描已完成，但部分通知或活动执行失败"},
+					"result": result,
+				})
+				return
+			}
+			writeJSON(w, http.StatusOK, result)
+		})
 		api.Get("/activities", func(w http.ResponseWriter, r *http.Request) {
 			if deps.Accounts == nil {
 				writeError(w, http.StatusServiceUnavailable, "activities_unavailable", "活动服务未启用")
 				return
 			}
 			activities, err := deps.Accounts.ListActivities(r.Context())
-			if err != nil {
+			if err != nil && len(activities) == 0 {
 				writeError(w, http.StatusBadGateway, "activities_failed", "无法读取真实活动状态")
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"items": activities})
+			payload := map[string]any{"items": activities}
+			if err != nil {
+				payload["warning"] = "部分账号无法读取活动状态，请按卡片提示重新认证"
+			}
+			writeJSON(w, http.StatusOK, payload)
 		})
 		api.Post("/activities/{accountID}/{activityID}", func(w http.ResponseWriter, r *http.Request) {
 			if deps.Accounts == nil {

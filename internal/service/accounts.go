@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -50,9 +52,13 @@ type Accounts struct {
 	zhipu       *zhipu.Client
 	events      *EventHub
 	mu          sync.RWMutex
+	accountOps  sync.RWMutex
+	activityMu  sync.Mutex
 	sessions    map[string]*DeviceLoginSession
 	kiroPending map[string]kiroLoginMeta
 }
+
+var ErrAccountNotFound = errors.New("账号不存在")
 
 type kiroLoginMeta struct {
 	SessionID string
@@ -467,6 +473,8 @@ func (s *Accounts) DeviceLoginStatus(id string) (DeviceLoginSession, bool) {
 }
 
 func (s *Accounts) RefreshOne(ctx context.Context, id string) (domain.AccountSummary, error) {
+	s.accountOps.RLock()
+	defer s.accountOps.RUnlock()
 	account, encrypted, err := s.store.ConnectedAccount(ctx, id)
 	if err != nil {
 		return domain.AccountSummary{}, err
@@ -565,45 +573,89 @@ func (s *Accounts) RefreshOne(ctx context.Context, id string) (domain.AccountSum
 	}
 }
 
+// Delete removes exactly one connected account, including its encrypted
+// credential and cached quota windows. Synthetic dashboard fixtures are not
+// addressable through this operation.
+func (s *Accounts) Delete(ctx context.Context, id string) error {
+	s.accountOps.Lock()
+	defer s.accountOps.Unlock()
+	account, err := s.store.DeleteConnectedAccount(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %s", ErrAccountNotFound, id)
+	}
+	if err != nil {
+		return fmt.Errorf("删除账号失败: %w", err)
+	}
+	s.events.Publish(Event{Type: "account.deleted", Message: fmt.Sprintf("已删除账号 %s", account.Alias), Timestamp: time.Now().UTC().Truncate(time.Second)})
+	return nil
+}
+
 func (s *Accounts) ListActivities(ctx context.Context) ([]domain.Activity, error) {
+	s.accountOps.RLock()
+	defer s.accountOps.RUnlock()
 	accounts, err := s.store.ConnectedAccounts(ctx)
 	if err != nil {
 		return nil, err
 	}
 	activities := make([]domain.Activity, 0)
+	var activityErrors []error
 	for _, account := range accounts {
 		if account.ProviderID != "workbuddy-cn" {
 			continue
 		}
+		activity := domain.Activity{ID: "daily-checkin", AccountID: account.ID, AccountAlias: account.Alias, ProviderID: account.ProviderID, Provider: account.ProviderName, Title: "每日签到", Status: "error", Action: "checkin"}
 		stored, encrypted, err := s.store.ConnectedAccount(ctx, account.ID)
 		if err != nil {
+			activity.Description = "账号信息已变化，请刷新活动状态"
+			activities = append(activities, activity)
+			activityErrors = append(activityErrors, fmt.Errorf("读取账号 %s 的活动凭据失败: %w", account.ID, err))
 			continue
 		}
 		plain, err := s.vault.Decrypt(encrypted)
 		if err != nil {
+			activity.Description = "本机认证信息无法解密，请重新登录该账号"
+			activities = append(activities, activity)
+			activityErrors = append(activityErrors, fmt.Errorf("解密账号 %s 的活动凭据失败: %w", account.ID, err))
 			continue
 		}
 		var credential workbuddy.Credential
-		if json.Unmarshal(plain, &credential) != nil {
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			activity.Description = "认证文件格式已失效，请重新登录该账号"
+			activities = append(activities, activity)
+			activityErrors = append(activityErrors, fmt.Errorf("解析账号 %s 的活动凭据失败: %w", account.ID, err))
 			continue
 		}
 		status, refreshed, err := s.workbuddy.FetchCheckinStatus(ctx, &credential)
 		if err != nil {
+			activity.Description = "无法读取官方签到状态，请检查登录状态后重试"
+			activities = append(activities, activity)
+			activityErrors = append(activityErrors, fmt.Errorf("读取账号 %s 的真实活动状态失败: %w", account.ID, err))
 			continue
 		}
 		if refreshed {
-			_, _ = s.persist(ctx, stored, credential, "WorkBuddy")
+			if _, err := s.persist(ctx, stored, credential, "WorkBuddy"); err != nil {
+				activity.Description = "登录已刷新，但无法保存新的认证状态，请稍后重试"
+				activities = append(activities, activity)
+				activityErrors = append(activityErrors, fmt.Errorf("保存账号 %s 的刷新凭据失败: %w", account.ID, err))
+				continue
+			}
 		}
 		state, description := "available", "今日尚未签到，可领取平台活动积分"
 		if status.TodayCheckedIn {
 			state, description = "completed", "今日已签到"
 		}
-		activities = append(activities, domain.Activity{ID: "daily-checkin", AccountID: account.ID, AccountAlias: account.Alias, ProviderID: account.ProviderID, Provider: account.ProviderName, Title: "每日签到", Description: description, Status: state, Action: "checkin"})
+		activity.Description = description
+		activity.Status = state
+		activities = append(activities, activity)
 	}
-	return activities, nil
+	return activities, errors.Join(activityErrors...)
 }
 
 func (s *Accounts) RunActivity(ctx context.Context, accountID, activityID string) (domain.Activity, error) {
+	s.accountOps.RLock()
+	defer s.accountOps.RUnlock()
+	s.activityMu.Lock()
+	defer s.activityMu.Unlock()
 	if activityID != "daily-checkin" {
 		return domain.Activity{}, fmt.Errorf("不支持的活动")
 	}
@@ -906,8 +958,12 @@ func (s *Accounts) connectZhipuWithID(ctx context.Context, id, alias string, cre
 	}
 	windows := make([]domain.QuotaSignal, 0, len(usage.Windows))
 	for index, window := range usage.Windows {
-		remaining := window.RemainingPercent
-		signal := domain.QuotaSignal{ID: fmt.Sprintf("zhipu-live-%d", index), Provider: "智谱 AI", Label: window.Label, Kind: window.Kind, Value: window.Remaining, Unit: window.Unit, RemainingPercent: &remaining, ResetAt: window.ResetAt, Status: quotaStatus(remaining), Source: "智谱 /api/monitor/usage/quota/limit", Confidence: "live"}
+		signal := domain.QuotaSignal{ID: fmt.Sprintf("zhipu-live-%d", index), Provider: "智谱 AI", Label: window.Label, Kind: window.Kind, Value: window.Remaining, Unit: window.Unit, ResetAt: window.ResetAt, Status: "healthy", Source: usage.Source, Confidence: "live"}
+		if window.HasRemainingPercent {
+			remaining := window.RemainingPercent
+			signal.RemainingPercent = &remaining
+			signal.Status = quotaStatus(remaining)
+		}
 		if window.Total > 0 {
 			total := window.Total
 			signal.Total = &total
@@ -915,10 +971,7 @@ func (s *Accounts) connectZhipuWithID(ctx context.Context, id, alias string, cre
 		windows = append(windows, signal)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
-	source := "智谱 Coding Plan 实时接口"
-	if !usage.QuotaAvailable {
-		source = "智谱官方 /api/paas/v4/models"
-	}
+	source := firstNonEmpty(usage.Source, "智谱官方开放平台")
 	account := newConnected(id, "zhipu", alias, "", firstNonEmpty(usage.Plan, "开放平台 API Key"), "api_key", source, windows, now)
 	return s.persist(ctx, account, credential, "智谱 AI")
 }

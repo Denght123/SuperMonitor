@@ -1,17 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Activity, AlertTriangle, Bell, Boxes, Check, ChevronRight, CircleGauge, Clock3,
+  Activity, AlertTriangle, Bell, Bot, Boxes, Check, ChevronRight, CircleGauge, Clock3,
   Database, ExternalLink, FileJson, Globe2, KeyRound, LayoutDashboard, LoaderCircle, Moon,
-  Plus, RefreshCw, Search, Settings, ShieldCheck, Sun, Upload, X, Zap,
+  Mail, Plus, RefreshCw, ScanSearch, Search, Send, Settings, ShieldCheck, Sun, Trash2, Upload, X, Zap,
 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import {
   Bar, CartesianGrid, Cell, ComposedChart, Line, Pie, PieChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
-import { api, type AccountSummary, type ActivityItem, type Alert, type DeviceLoginSession, type Overview, type Provider, type QuotaSignal } from './api/client'
+import { api, type AccountSummary, type ActivityItem, type Alert, type DeviceLoginSession, type NotificationChannel, type NotificationChannelKind, type NotificationEvaluation, type NotificationPolicy, type Overview, type Provider, type QuotaSignal } from './api/client'
 import { useOverview } from './hooks/useOverview'
 import { compactNumber, formatMetric, quotaValue, relativeTime } from './lib/format'
+import { filterUsageByRange, usageRangeDescription, usageRangeOptions, type UsageRange } from './lib/usageRange'
 import { ProviderLogo } from './components/ProviderLogo'
 
 type Page = 'overview' | 'accounts' | 'usage' | 'activities' | 'alerts' | 'settings'
@@ -78,7 +79,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.6.2</small></div>
+        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.7.0</small></div>
       </aside>
 
       <main className="main-stage">
@@ -138,8 +139,17 @@ function KPIBand({ data }: { data: Overview }) {
 }
 
 function TokenChart({ data }: { data: Overview }) {
-  if (!data.tokenTrend.length) return <section className="instrument-panel token-panel"><div className="panel-header"><div><h2>30 天 Token 轨迹</h2><p>输入、输出、缓存与请求量</p></div></div><EmptyState title="暂无 Token 用量" detail="平台返回可记录的模型用量后会生成趋势图。" /></section>
-  return <section className="instrument-panel token-panel"><div className="panel-header"><div><h2>30 天 Token 轨迹</h2><p>输入、输出、缓存与请求量</p></div><span className="source-badge">30 天</span></div><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={data.tokenTrend} margin={{ top: 10, right: 6, left: -8, bottom: 0 }}><CartesianGrid stroke="var(--chart-grid)" vertical={false} /><XAxis dataKey="date" tickFormatter={(value: string) => value.slice(5)} tick={{ fill: 'var(--text-muted)', fontSize: 13 }} axisLine={false} tickLine={false} minTickGap={26} /><YAxis yAxisId="tokens" tickFormatter={compactNumber} tick={{ fill: 'var(--text-muted)', fontSize: 13 }} axisLine={false} tickLine={false} /><YAxis yAxisId="requests" hide orientation="right" /><Tooltip content={<TokenTooltip />} /><Bar yAxisId="tokens" dataKey="cacheTokens" stackId="tokens" fill="var(--chart-cache)" /><Bar yAxisId="tokens" dataKey="inputTokens" stackId="tokens" fill="var(--chart-input)" /><Bar yAxisId="tokens" dataKey="outputTokens" stackId="tokens" fill="var(--chart-output)" radius={[4, 4, 0, 0]} /><Line yAxisId="requests" dataKey="requests" stroke="var(--chart-line)" strokeWidth={2} dot={false} /></ComposedChart></ResponsiveContainer></div></section>
+  const [range, setRange] = useState<UsageRange>('30d')
+  const visibleData = useMemo(() => filterUsageByRange(data.tokenTrend, range), [data.tokenTrend, range])
+  const showYear = range === 'all'
+  const rangeControl = <div className="usage-range-switch" role="group" aria-label="Token 轨迹时间范围">
+    {usageRangeOptions.map((option) => <button type="button" key={option.value} aria-pressed={range === option.value} onClick={() => setRange(option.value)}>{option.label}</button>)}
+  </div>
+
+  return <section className="instrument-panel token-panel">
+    <div className="panel-header token-chart-header"><div><h2>Token 轨迹</h2><p>输入、输出、缓存与请求量 · {usageRangeDescription(range, visibleData.length)}</p></div>{rangeControl}</div>
+    {visibleData.length ? <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={visibleData} margin={{ top: 10, right: 6, left: -8, bottom: 0 }}><CartesianGrid stroke="var(--chart-grid)" vertical={false} /><XAxis dataKey="date" tickFormatter={(value: string) => showYear ? value.slice(0, 7).replace('-', '/') : value.slice(5)} tick={{ fill: 'var(--text-muted)', fontSize: 13 }} axisLine={false} tickLine={false} minTickGap={range === '7d' ? 12 : range === '30d' ? 26 : 48} /><YAxis yAxisId="tokens" tickFormatter={compactNumber} tick={{ fill: 'var(--text-muted)', fontSize: 13 }} axisLine={false} tickLine={false} /><YAxis yAxisId="requests" hide orientation="right" /><Tooltip content={<TokenTooltip />} /><Bar yAxisId="tokens" dataKey="cacheTokens" stackId="tokens" fill="var(--chart-cache)" /><Bar yAxisId="tokens" dataKey="inputTokens" stackId="tokens" fill="var(--chart-input)" /><Bar yAxisId="tokens" dataKey="outputTokens" stackId="tokens" fill="var(--chart-output)" radius={[4, 4, 0, 0]} /><Line yAxisId="requests" dataKey="requests" stroke="var(--chart-line)" strokeWidth={2} dot={false} /></ComposedChart></ResponsiveContainer></div> : <EmptyState title={data.tokenTrend.length ? '此时间段暂无 Token 用量' : '暂无 Token 用量'} detail={data.tokenTrend.length ? '切换到更长的时间范围，或等待新的用量记录写入。' : '平台返回可记录的模型用量后会生成趋势图。'} />}
+  </section>
 }
 
 function TokenTooltip({ active, payload, label }: { active?: boolean; payload?: { name: string; value: number; color: string }[]; label?: string }) {
@@ -315,7 +325,7 @@ function secretConfig(providerId: string) {
 		bailian: { title: '阿里云 RAM 只读 AccessKey', detail: '调用阿里云官方 BSS QueryAccountBalance。请使用专用 RAM 用户并授予 AliyunBSSReadOnlyAccess；这是阿里云账户级余额，不是虚构的 Token Plan 数据。', placeholder: 'AccessKey ID（LTAI...）', action: '验证并读取阿里云余额', emptyError: '请同时填写 AccessKey ID 与 AccessKey Secret' },
 		'coze-cn': { title: '扣子官网网页登录态', detail: '扣子目前没有面向额度监控的公开 OAuth scope；使用官网 Cookie 调用站点自身的 /credit/balance 接口读取积分。', placeholder: '粘贴 www.coze.cn 的完整 Cookie', action: '验证并读取扣子积分', emptyError: '请粘贴扣子官网 Cookie', multiline: true, loginUrl: 'https://www.coze.cn/' },
     deepseek: { title: 'DeepSeek API Key', detail: '调用官方 /user/balance 接口读取人民币账户余额。', placeholder: 'sk-...', action: '验证并读取余额', emptyError: '请输入 DeepSeek API Key' },
-    zhipu: { title: '智谱开放平台 API Key', detail: '优先读取 Coding Plan 额度；普通开放平台 Key 会通过官方模型接口验证并显示可用模型数量，不会伪造额度。', placeholder: '粘贴 open.bigmodel.cn API Key', action: '验证 API Key 并读取信息', emptyError: '请输入智谱 API Key' },
+    zhipu: { title: '智谱开放平台 API Key', detail: '优先读取 Coding Plan 额度；普通开放平台 Key 会读取官方人民币可用余额，余额接口不可用时再验证模型访问。', placeholder: '粘贴 open.bigmodel.cn API Key', action: '验证 API Key 并读取额度', emptyError: '请输入智谱 API Key' },
     mimo: { title: '小米 MiMo 控制台 Cookie', detail: '仅用于读取小米 MiMo Token Plan；与华为基元律动完全独立。平台未提供可用于额度读取的 OAuth，因此提供官方登录跳转与逐步获取教程。', placeholder: '在 platform.xiaomimimo.com 登录后复制请求 Cookie', action: '验证并读取 Token Plan', emptyError: '请粘贴小米 MiMo 控制台 Cookie', multiline: true, loginUrl: 'https://platform.xiaomimimo.com/' },
     tokenrhythm: { title: '基元律动网页登录态', detail: '华为基元律动 tokenrhythm.studio；支持 sess_ 会话令牌或 tr_session / tr_ref_device Cookie。与小米 MiMo 完全独立。', placeholder: 'sess_...\n或 tr_session=sess_...; tr_ref_device=...', action: '验证并读取人民币余额', emptyError: '请粘贴基元律动 sess_ 会话令牌或 Cookie', multiline: true, loginUrl: 'https://tokenrhythm.studio/' },
   }
@@ -328,7 +338,7 @@ function ActivitiesPage({ onReload }: { onReload: () => void }) {
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState<string[]>([])
   const [error, setError] = useState('')
-  const load = () => { setLoading(true); setError(''); void api.activities().then((payload) => setItems(payload.items)).catch((reason: Error) => setError(reason.message)).finally(() => setLoading(false)) }
+  const load = () => { setLoading(true); setError(''); void api.activities().then((payload) => { setItems(payload.items); setError(payload.warning ?? '') }).catch((reason: Error) => setError(reason.message)).finally(() => setLoading(false)) }
   useEffect(load, [])
   const run = async (item: ActivityItem) => {
     setRunning((current) => [...current, item.accountId]); setError('')
@@ -343,23 +353,271 @@ function ActivitiesPage({ onReload }: { onReload: () => void }) {
   const runAll = async () => { for (const item of available) await run(item) }
   return <section className="section-block"><div className="section-header"><div><h2>可执行活动</h2><p>只展示后端已通过官方接口确认存在的真实活动。</p></div><button className="primary-button" onClick={() => void runAll()} disabled={!available.length || running.length > 0}>{running.length ? <LoaderCircle className="spin" size={17} /> : <Zap size={17} />}全部签到</button></div>
     {error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}
-    {loading ? <div className="activity-loading"><LoaderCircle className="spin" size={20} />正在读取平台活动状态</div> : items.length ? <div className="activity-grid">{items.map((item) => { const busy = running.includes(item.accountId); const completed = item.status === 'completed'; return <article className={`activity-card ${completed ? 'completed' : ''}`} key={`${item.accountId}-${item.id}`}><div className="activity-icon">{completed ? <Check size={20} /> : <Zap size={20} />}</div><div className="activity-copy"><span>{item.provider}</span><strong>{item.accountAlias} · {item.title}</strong><small>{item.description}</small></div><button className={completed ? 'secondary-button completed' : 'primary-button'} onClick={() => void run(item)} disabled={completed || busy}>{busy ? <LoaderCircle className="spin" size={17} /> : completed ? <Check size={17} /> : <Zap size={17} />}{completed ? '今日已完成' : '立即签到'}</button></article> })}</div> : <EmptyState title="当前账号池没有可执行活动" detail="Codex 等没有签到活动的平台不会出现在这里；接入支持活动的国内 WorkBuddy 账号后会自动显示。" />}
+    {loading ? <div className="activity-loading"><LoaderCircle className="spin" size={20} />正在读取平台活动状态</div> : items.length ? <div className="activity-grid">{items.map((item) => { const busy = running.includes(item.accountId); const completed = item.status === 'completed'; const unavailable = item.status === 'error'; return <article className={`activity-card ${completed ? 'completed' : unavailable ? 'error' : ''}`} key={`${item.accountId}-${item.id}`}><div className="activity-icon">{completed ? <Check size={20} /> : unavailable ? <AlertTriangle size={20} /> : <Zap size={20} />}</div><div className="activity-copy"><span>{item.provider}</span><strong>{item.accountAlias} · {item.title}</strong><small>{item.description}</small></div><button className={completed ? 'secondary-button completed' : unavailable ? 'secondary-button' : 'primary-button'} onClick={() => void run(item)} disabled={completed || unavailable || busy}>{busy ? <LoaderCircle className="spin" size={17} /> : completed ? <Check size={17} /> : unavailable ? <AlertTriangle size={17} /> : <Zap size={17} />}{completed ? '今日已完成' : unavailable ? '状态读取失败' : '立即签到'}</button></article> })}</div> : <EmptyState title="当前账号池没有可执行活动" detail="Codex 等没有签到活动的平台不会出现在这里；接入支持活动的国内 WorkBuddy 账号后会自动显示。" />}
   </section>
 }
-function AlertsPage({ alerts }: { alerts: Alert[] }) { return <section className="section-block alert-list"><div className="section-header"><div><h2>未解决告警</h2><p>同一故障自动去重，恢复后保留记录。</p></div></div>{alerts.map((alert) => <article key={alert.id} className={`alert-item severity-${alert.severity}`}><AlertTriangle size={22} /><div><span>{alert.provider} · {relativeTime(alert.createdAt)}</span><strong>{alert.title}</strong><p>{alert.message}</p><small>建议：{alert.recovery}</small></div></article>)}</section> }
-function SettingsPage() { return <div className="settings-grid"><SettingBlock icon={Sun} title="默认浅色主题" detail="可切换深色或跟随系统，选择会保存在浏览器。" /><SettingBlock icon={ShieldCheck} title="本机凭据保险箱" detail="AES-GCM 加密，密钥与数据库仅保存在部署机器。" /><SettingBlock icon={RefreshCw} title="额度轮询" detail="当前默认 10 分钟刷新，也可随时手动刷新。" /><SettingBlock icon={Database} title="数据隔离" detail="OAuth 文件、数据库、日志与备份均已加入忽略规则。" /></div> }
-function SettingBlock({ icon: Icon, title, detail }: { icon: typeof Settings; title: string; detail: string }) { return <article className="setting-block"><Icon size={24} /><span><strong>{title}</strong><small>{detail}</small></span></article> }
+function AlertsPage({ alerts }: { alerts: Alert[] }) { return <section className="section-block alert-list"><div className="section-header"><div><h2>未解决告警</h2><p>同一故障自动去重；额度恢复或提醒窗口结束后会自动移除。</p></div></div>{alerts.map((alert) => <article key={alert.id} className={`alert-item severity-${alert.severity}`}><AlertTriangle size={22} /><div><span>{alert.provider} · {relativeTime(alert.createdAt)}</span><strong>{alert.title}</strong><p>{alert.message}</p><small>建议：{alert.recovery}</small></div></article>)}</section> }
+function SettingsPage() {
+  const [channels, setChannels] = useState<NotificationChannel[]>([])
+  const [policy, setPolicy] = useState<NotificationPolicy | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [creating, setCreating] = useState<NotificationChannelKind | null>(null)
+  const [testingID, setTestingID] = useState('')
+  const [deletingID, setDeletingID] = useState('')
+  const [confirmDeleteID, setConfirmDeleteID] = useState('')
+  const [scanning, setScanning] = useState(false)
+  const [scanError, setScanError] = useState('')
+  const [scanResult, setScanResult] = useState<NotificationEvaluation | null>(null)
+  const [formErrors, setFormErrors] = useState<Partial<Record<NotificationChannelKind, string>>>({})
+  const [feishu, setFeishu] = useState({ name: '', webhookUrl: '' })
+  const [mail, setMail] = useState({ name: '', sender: '', authCode: '', recipient: '' })
+
+  const loadSettings = useCallback(async () => {
+    setLoading(true)
+    setLoadError('')
+    try {
+      const [channelPayload, nextPolicy] = await Promise.all([api.notificationChannels(), api.notificationPolicy()])
+      setChannels(channelPayload.items)
+      setPolicy(nextPolicy)
+    } catch (reason) {
+      setLoadError(reason instanceof Error ? reason.message : '通知设置读取失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void loadSettings() }, [loadSettings])
+
+  const clearFeedback = () => { setSuccess(''); setActionError('') }
+  const createChannel = async (kind: NotificationChannelKind, event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (creating) return
+    const error = kind === 'feishu'
+      ? (!feishu.webhookUrl.trim() ? '请输入飞书机器人 Webhook 地址' : '')
+      : (!mail.sender.trim() ? '请输入 QQ 发件邮箱' : !mail.sender.trim().toLowerCase().endsWith('@qq.com') ? '发件人必须是 QQ 邮箱地址' : !mail.authCode.trim() ? '请输入 SMTP 授权码' : !mail.recipient.trim() ? '请输入收件邮箱' : '')
+    if (error) {
+      setFormErrors((current) => ({ ...current, [kind]: error }))
+      return
+    }
+    clearFeedback()
+    setFormErrors((current) => ({ ...current, [kind]: '' }))
+    setCreating(kind)
+    try {
+      const channel = kind === 'feishu'
+        ? await api.createNotificationChannel({ kind, name: feishu.name.trim(), webhookUrl: feishu.webhookUrl.trim() })
+        : await api.createNotificationChannel({ kind, name: mail.name.trim(), sender: mail.sender.trim(), authCode: mail.authCode.trim(), recipient: mail.recipient.trim() })
+      setChannels((current) => [channel, ...current])
+      if (kind === 'feishu') setFeishu({ name: '', webhookUrl: '' })
+      else setMail({ name: '', sender: '', authCode: '', recipient: '' })
+      setSuccess(`通知渠道“${channel.name}”已连接并加密保存`)
+    } catch (reason) {
+      setFormErrors((current) => ({ ...current, [kind]: reason instanceof Error ? reason.message : '通知渠道连接失败' }))
+    } finally {
+      setCreating(null)
+    }
+  }
+
+  const testChannel = async (channel: NotificationChannel) => {
+    if (testingID || deletingID) return
+    clearFeedback()
+    setTestingID(channel.id)
+    try {
+      const result = await api.testNotificationChannel(channel.id)
+      setSuccess(`${channel.name}：${result.message}`)
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : '测试通知发送失败')
+    } finally {
+      setTestingID('')
+    }
+  }
+
+  const deleteChannel = async (channel: NotificationChannel) => {
+    if (testingID || deletingID) return
+    clearFeedback()
+    setDeletingID(channel.id)
+    try {
+      await api.deleteNotificationChannel(channel.id)
+      setChannels((current) => current.filter((item) => item.id !== channel.id))
+      setConfirmDeleteID('')
+      setSuccess(`通知渠道“${channel.name}”已删除`)
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : '通知渠道删除失败')
+    } finally {
+      setDeletingID('')
+    }
+  }
+
+  const evaluateNow = async () => {
+    if (scanning) return
+    clearFeedback()
+    setScanError('')
+    setScanResult(null)
+    setScanning(true)
+    try {
+      const result = await api.evaluateNotifications()
+      setScanResult(result)
+      setSuccess('告警与真实活动扫描已完成')
+    } catch (reason) {
+      setScanError(reason instanceof Error ? reason.message : '扫描失败，请稍后重试')
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  if (loading) return <div className="settings-loading" role="status" aria-live="polite"><LoaderCircle className="spin" size={22} /><span><strong>正在读取通知设置</strong><small>加载本机保存的渠道和固定告警策略</small></span></div>
+  if (loadError || !policy) return <div className="settings-load-error" role="alert"><AlertTriangle size={22} /><div><strong>通知设置暂时无法读取</strong><p>{loadError || '未返回告警策略'}</p><button className="secondary-button" onClick={() => void loadSettings()}><RefreshCw size={16} />重新加载</button></div></div>
+
+  const channelBusy = Boolean(testingID || deletingID)
+  return <div className="notification-settings">
+    <section className="notification-command" aria-labelledby="notification-command-title">
+      <div><span className="notification-command-icon"><Bell size={21} /></span><span><h2 id="notification-command-title">通知与自动活动</h2><p>额度预警、重置提醒和已验证活动由本机定时扫描，命中策略后发送到已连接渠道。</p></span></div>
+      <button className="primary-button" onClick={() => void evaluateNow()} disabled={scanning} aria-describedby="notification-scan-note">{scanning ? <LoaderCircle className="spin" size={17} /> : <ScanSearch size={17} />}{scanning ? '正在扫描' : '立即扫描'}</button>
+    </section>
+
+    <div className="settings-announcer" aria-live="polite">
+      {success ? <div className="settings-feedback success"><Check size={17} />{success}</div> : null}
+      {actionError ? <div className="settings-feedback error" role="alert"><AlertTriangle size={17} />{actionError}</div> : null}
+    </div>
+
+    <div className="notification-layout">
+      <div className="notification-main">
+        <section className="settings-panel channel-panel" aria-labelledby="channel-list-title">
+          <header><div><h2 id="channel-list-title">通知渠道</h2><p>渠道凭据不会回显；这里只展示脱敏后的投递目标。</p></div><span className="channel-count">{channels.length} 个</span></header>
+          {channels.length ? <div className="notification-channel-list">{channels.map((channel) => {
+            const testing = testingID === channel.id
+            const deleting = deletingID === channel.id
+            const confirming = confirmDeleteID === channel.id
+            return <article className="notification-channel" key={channel.id}>
+              <span className={`channel-kind-icon ${channel.kind}`}>{channel.kind === 'feishu' ? <Bot size={20} /> : <Mail size={20} />}</span>
+              <div className="channel-copy"><span>{channel.kind === 'feishu' ? '飞书机器人' : 'QQ 邮箱 SMTP'} · {channel.enabled ? '已启用' : '已停用'}</span><strong>{channel.name}</strong><small>{channel.target}</small><time>更新于 {formatDateTime(channel.updatedAt)}</time></div>
+              {confirming ? <div className="channel-delete-confirm" role="group" aria-label={`确认删除 ${channel.name}`}><strong>删除“{channel.name}”？</strong><span><button className="text-button" onClick={() => setConfirmDeleteID('')} disabled={deleting} autoFocus>取消</button><button className="danger-button" onClick={() => void deleteChannel(channel)} disabled={deleting}>{deleting ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}{deleting ? '删除中' : '确认删除'}</button></span></div> : <div className="channel-actions"><button className="secondary-button" onClick={() => void testChannel(channel)} disabled={channelBusy} aria-label={`测试 ${channel.name}`}>{testing ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}{testing ? '发送中' : '发送测试'}</button><button className="channel-delete-button" onClick={() => { clearFeedback(); setConfirmDeleteID(channel.id) }} disabled={channelBusy} aria-label={`删除 ${channel.name}`}><Trash2 size={17} /></button></div>}
+            </article>
+          })}</div> : <div className="notification-empty"><Bell size={27} /><strong>还没有通知渠道</strong><span>在下方连接飞书机器人或 QQ 邮箱后，告警才会向外发送。</span></div>}
+        </section>
+
+        <section className="settings-panel channel-connect-panel" aria-labelledby="channel-connect-title">
+          <header><div><h2 id="channel-connect-title">连接新渠道</h2><p>提交后立即写入本机加密保险箱，可在上方发送测试消息。</p></div></header>
+          <div className="channel-form-grid">
+            <form className="notification-form" onSubmit={(event) => void createChannel('feishu', event)} aria-labelledby="feishu-form-title" aria-busy={creating === 'feishu'}>
+              <div className="notification-form-title"><span className="channel-kind-icon feishu"><Bot size={20} /></span><span><strong id="feishu-form-title">飞书自定义机器人</strong><small>使用官方群机器人 HTTPS Webhook</small></span></div>
+              <label htmlFor="feishu-name">渠道名称 <small>可选</small></label>
+              <input id="feishu-name" value={feishu.name} onChange={(event) => setFeishu((current) => ({ ...current, name: event.target.value }))} placeholder="例如：开发组告警" maxLength={80} disabled={creating !== null} />
+              <label htmlFor="feishu-webhook">机器人 Webhook</label>
+              <input id="feishu-webhook" type="password" autoComplete="off" value={feishu.webhookUrl} onChange={(event) => setFeishu((current) => ({ ...current, webhookUrl: event.target.value }))} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." disabled={creating !== null} required />
+              {formErrors.feishu ? <div className="form-error" role="alert"><AlertTriangle size={16} />{formErrors.feishu}</div> : null}
+              <button className="primary-button" type="submit" disabled={creating !== null || !feishu.webhookUrl.trim()}>{creating === 'feishu' ? <LoaderCircle className="spin" size={17} /> : <Bot size={17} />}{creating === 'feishu' ? '正在连接' : '连接飞书机器人'}</button>
+            </form>
+
+            <form className="notification-form" onSubmit={(event) => void createChannel('qq_mail', event)} aria-labelledby="qq-mail-form-title" aria-busy={creating === 'qq_mail'}>
+              <div className="notification-form-title"><span className="channel-kind-icon qq_mail"><Mail size={20} /></span><span><strong id="qq-mail-form-title">QQ 邮箱 SMTP</strong><small>通过 smtp.qq.com:465 加密发送</small></span></div>
+              <label htmlFor="mail-name">渠道名称 <small>可选</small></label>
+              <input id="mail-name" value={mail.name} onChange={(event) => setMail((current) => ({ ...current, name: event.target.value }))} placeholder="例如：个人邮箱提醒" maxLength={80} disabled={creating !== null} />
+              <div className="notification-field-pair"><span><label htmlFor="mail-sender">QQ 发件邮箱</label><input id="mail-sender" type="email" autoComplete="email" value={mail.sender} onChange={(event) => setMail((current) => ({ ...current, sender: event.target.value }))} placeholder="name@qq.com" disabled={creating !== null} required /></span><span><label htmlFor="mail-recipient">收件邮箱</label><input id="mail-recipient" type="email" autoComplete="email" value={mail.recipient} onChange={(event) => setMail((current) => ({ ...current, recipient: event.target.value }))} placeholder="接收提醒的邮箱" disabled={creating !== null} required /></span></div>
+              <label htmlFor="mail-auth-code">SMTP 授权码 <small>不是 QQ 密码</small></label>
+              <input id="mail-auth-code" type="password" autoComplete="new-password" value={mail.authCode} onChange={(event) => setMail((current) => ({ ...current, authCode: event.target.value }))} placeholder="在 QQ 邮箱设置中生成的授权码" maxLength={128} disabled={creating !== null} required />
+              {formErrors.qq_mail ? <div className="form-error" role="alert"><AlertTriangle size={16} />{formErrors.qq_mail}</div> : null}
+              <button className="primary-button" type="submit" disabled={creating !== null || !mail.sender.trim() || !mail.authCode.trim() || !mail.recipient.trim()}>{creating === 'qq_mail' ? <LoaderCircle className="spin" size={17} /> : <Mail size={17} />}{creating === 'qq_mail' ? '正在连接' : '连接 QQ 邮箱'}</button>
+            </form>
+          </div>
+          <p className="notification-security-note"><ShieldCheck size={17} /><span><strong>敏感信息只保存在你的服务器</strong>Webhook 与 SMTP 授权码由本机 AES-GCM 加密，接口和页面只返回脱敏目标，不会回显密钥。</span></p>
+        </section>
+      </div>
+
+      <aside className="notification-sidebar">
+        <section className="settings-panel policy-panel" aria-labelledby="policy-title">
+          <header><div><h2 id="policy-title">固定告警策略</h2><p>当前版本由服务端统一执行，避免不同浏览器产生冲突。</p></div><span className="policy-lock"><KeyRound size={14} />只读</span></header>
+          <div className="policy-list">
+            <div><CircleGauge size={18} /><span><strong>低额度预警</strong><small>任一可计算额度降至 {policy.lowQuotaPercent}% 或以下时提醒一次</small></span></div>
+            <div><Clock3 size={18} /><span><strong>重置时间提醒</strong><small>距离重置 {policy.resetReminderDays.join(' 天、')} 天时各提醒一次</small></span></div>
+            <div><RefreshCw size={18} /><span><strong>后台扫描频率</strong><small>服务持续运行时每 {policy.schedulerMinutes} 分钟检查一次</small></span></div>
+            <div><Zap size={18} /><span><strong>自动活动{policy.autoActivities ? '已开启' : '已关闭'}</strong><small>当前只执行已验证的 WorkBuddy 国内版每日签到；其他平台接入真实活动适配器后才会出现。</small></span></div>
+          </div>
+          <p className="policy-scan-note" id="notification-scan-note">“立即扫描”会按以上策略检查全部已连接账号，并可能发送提醒或执行已验证签到。</p>
+        </section>
+
+        {scanError ? <section className="settings-panel scan-result-panel error" role="alert"><AlertTriangle size={21} /><div><strong>本次扫描未完成</strong><p>{scanError}</p><button className="secondary-button" onClick={() => void evaluateNow()} disabled={scanning}><RefreshCw size={16} />重新扫描</button></div></section> : null}
+        {scanResult ? <section className={`settings-panel scan-result-panel ${scanResult.failedMessages ? 'warning' : 'success'}`} aria-live="polite"><Check size={21} /><div><strong>最近一次扫描结果</strong><p>检查 {scanResult.checkedAccounts} 个账号，触发 {scanResult.triggeredAlerts} 条提醒，成功投递 {scanResult.deliveredMessages} 条。</p><dl><div><dt>投递失败</dt><dd>{scanResult.failedMessages}</dd></div><div><dt>可用活动</dt><dd>{scanResult.availableActivities}</dd></div><div><dt>完成活动</dt><dd>{scanResult.completedActivities}</dd></div></dl></div></section> : null}
+      </aside>
+    </div>
+  </div>
+}
 
 function AccountDrawer({ account, onClose, onReload }: { account: AccountSummary; onClose: () => void; onReload: () => void }) {
   const ref = useRef<HTMLElement>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
-  useEffect(() => { const listener = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }; window.addEventListener('keydown', listener); ref.current?.focus(); return () => window.removeEventListener('keydown', listener) }, [onClose])
+  const [deletePhase, setDeletePhase] = useState<'idle' | 'confirming' | 'deleting'>('idle')
+  const [deleteError, setDeleteError] = useState('')
+  const deleteDialogOpen = deletePhase !== 'idle'
+  const deleting = deletePhase === 'deleting'
+  useEffect(() => { ref.current?.focus() }, [])
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !deleteDialogOpen) onClose()
+    }
+    window.addEventListener('keydown', listener)
+    return () => window.removeEventListener('keydown', listener)
+  }, [deleteDialogOpen, onClose])
   const refreshAccount = async () => { setRefreshing(true); setError(''); try { await api.refreshAccount(account.id); onReload(); onClose() } catch (reason) { setError(reason instanceof Error ? reason.message : '刷新失败'); setRefreshing(false) } }
+  const openDeleteDialog = () => { setError(''); setDeleteError(''); setDeletePhase('confirming') }
+  const closeDeleteDialog = () => { if (!deleting) { setDeleteError(''); setDeletePhase('idle') } }
+  const deleteAccount = async () => {
+    if (deleting) return
+    setDeletePhase('deleting')
+    setDeleteError('')
+    try {
+      await api.deleteAccount(account.id)
+      onClose()
+      onReload()
+    } catch (reason) {
+      setDeleteError(reason instanceof Error ? reason.message : '删除账号失败，请稍后重试')
+      setDeletePhase('confirming')
+    }
+  }
   const isWorkBuddy = account.providerId === 'workbuddy-cn' || account.providerId === 'workbuddy-global'
   const mainSignals = isWorkBuddy ? account.quotaWindows.slice(0, 1) : account.quotaWindows
   const packageSignals = isWorkBuddy ? account.quotaWindows.slice(1) : []
-  return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><aside className="account-drawer" ref={ref} tabIndex={-1}><header><div><span>实时账号</span><h2>{account.alias}</h2><p>{account.email || account.provider} · {planLabel(account.plan || account.region)}</p></div><button className="close-button" onClick={onClose}><X size={22} /></button></header><div className="drawer-content"><div className="detail-row"><span>认证方式</span><strong>{authMethodLabel(account.authMethod)}</strong></div><div className="detail-row"><span>数据来源</span><strong>{account.source}</strong></div><div className="detail-row"><span>最近刷新</span><strong>{formatDateTime(account.lastRefreshedAt)}</strong></div><div className="drawer-quotas">{mainSignals.length ? mainSignals.map((signal) => <QuotaProgress key={signal.id} signal={signal} />) : <EmptyState title={account.primaryMetric} detail={account.secondaryMetric} />}</div>{packageSignals.length ? <details className="package-details"><summary><span>官方积分包明细</span><b>{packageSignals.length} 个</b></summary><p>这些积分包来自官方 Billing 返回，金额已计入上方总积分，不会再次累加。</p><div>{packageSignals.map((signal) => <div className="package-row" key={signal.id}><span><strong>{signal.label}</strong><small>{signal.expiresAt ? `${formatCompactDate(signal.expiresAt)} 到期` : '未返回到期时间'}</small></span><b>{quotaValue(signal.value, signal.unit)}</b></div>)}</div></details> : null}{error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}</div><footer><button className="primary-button" onClick={() => void refreshAccount()} disabled={refreshing}>{refreshing ? <LoaderCircle className="spin" size={18} /> : <RefreshCw size={18} />}立即读取真实额度</button></footer></aside></div>
+  return <>
+    <div className="drawer-backdrop" onMouseDown={(event) => { if (!deleteDialogOpen && event.target === event.currentTarget) onClose() }}>
+      <aside className="account-drawer" ref={ref} tabIndex={-1} aria-label={`${account.alias} 账号详情`}>
+        <header><div><span>实时账号</span><h2>{account.alias}</h2><p>{account.email || account.provider} · {planLabel(account.plan || account.region)}</p></div><button className="close-button" onClick={onClose} aria-label="关闭账号详情" disabled={deleting}><X size={22} /></button></header>
+        <div className="drawer-content">
+          <div className="detail-row"><span>认证方式</span><strong>{authMethodLabel(account.authMethod)}</strong></div>
+          <div className="detail-row"><span>数据来源</span><strong>{account.source}</strong></div>
+          <div className="detail-row"><span>最近刷新</span><strong>{formatDateTime(account.lastRefreshedAt)}</strong></div>
+          <div className="drawer-quotas">{mainSignals.length ? mainSignals.map((signal) => <QuotaProgress key={signal.id} signal={signal} />) : <EmptyState title={account.primaryMetric} detail={account.secondaryMetric} />}</div>
+          {packageSignals.length ? <details className="package-details"><summary><span>官方积分包明细</span><b>{packageSignals.length} 个</b></summary><p>这些积分包来自官方 Billing 返回，金额已计入上方总积分，不会再次累加。</p><div>{packageSignals.map((signal) => <div className="package-row" key={signal.id}><span><strong>{signal.label}</strong><small>{signal.expiresAt ? `${formatCompactDate(signal.expiresAt)} 到期` : '未返回到期时间'}</small></span><b>{quotaValue(signal.value, signal.unit)}</b></div>)}</div></details> : null}
+          {error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}
+        </div>
+        <footer className="drawer-footer">
+          <button className="primary-button" onClick={() => void refreshAccount()} disabled={refreshing || deleting}>{refreshing ? <LoaderCircle className="spin" size={18} /> : <RefreshCw size={18} />}立即读取真实额度</button>
+          {!account.synthetic ? <div className="danger-zone"><span><strong>删除本机账号</strong><small>清除认证凭据和额度记录，不会注销平台账号。</small></span><button className="danger-button" onClick={openDeleteDialog} disabled={refreshing || deleting}><Trash2 size={17} />删除账号</button></div> : null}
+        </footer>
+      </aside>
+    </div>
+    {deleteDialogOpen ? <DeleteAccountDialog account={account} busy={deleting} error={deleteError} onCancel={closeDeleteDialog} onConfirm={() => void deleteAccount()} /> : null}
+  </>
+}
+
+function DeleteAccountDialog({ account, busy, error, onCancel, onConfirm }: { account: AccountSummary; busy: boolean; error: string; onCancel: () => void; onConfirm: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const dialog = ref.current
+    if (dialog && !dialog.open) dialog.showModal()
+    return () => { if (dialog?.open) dialog.close() }
+  }, [])
+  return <dialog ref={ref} className="delete-account-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title" aria-describedby="delete-account-description" onCancel={(event) => { event.preventDefault(); if (!busy) onCancel() }} onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onCancel() }}>
+    <div className="delete-confirm-content">
+      <div className="delete-confirm-heading"><span><Trash2 size={21} /></span><div><h2 id="delete-account-title">确认删除账号</h2><p id="delete-account-description">将从本机清除加密认证信息和额度记录，此操作不会注销平台账号。</p></div></div>
+      <strong className="delete-account-name">{account.alias}</strong>
+      <small className="delete-account-meta">{account.email || account.provider} · {planLabel(account.plan || account.region)}</small>
+      {error ? <div className="form-error delete-error" role="alert"><AlertTriangle size={17} /><span><strong>{error}</strong><small>账号信息仍然保留，你可以重试或取消。</small></span></div> : null}
+    </div>
+    <footer className="delete-confirm-actions"><button className="secondary-button" onClick={onCancel} disabled={busy} autoFocus>取消</button><button className="danger-button" onClick={onConfirm} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <Trash2 size={17} />}{busy ? '正在删除' : '确认删除'}</button></footer>
+  </dialog>
 }
 
 function EmptyState({ title, detail }: { title: string; detail: string }) { return <div className="empty-state"><Boxes size={28} /><strong>{title}</strong><span>{detail}</span></div> }

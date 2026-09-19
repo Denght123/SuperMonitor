@@ -15,11 +15,17 @@ import (
 )
 
 const (
-	quotaURL  = "https://open.bigmodel.cn/api/monitor/usage/quota/limit"
-	modelsURL = "https://open.bigmodel.cn/api/paas/v4/models"
+	defaultQuotaURL         = "https://open.bigmodel.cn/api/monitor/usage/quota/limit"
+	defaultAccountReportURL = "https://open.bigmodel.cn/api/biz/account/query-customer-account-report"
+	defaultModelsURL        = "https://open.bigmodel.cn/api/paas/v4/models"
 )
 
-type Client struct{ http *http.Client }
+type Client struct {
+	http             *http.Client
+	quotaURL         string
+	accountReportURL string
+	modelsURL        string
+}
 
 type Credential struct {
 	APIKey string `json:"apiKey"`
@@ -30,6 +36,7 @@ type Window struct {
 	Kind, Unit             string
 	Used, Total, Remaining float64
 	RemainingPercent       float64
+	HasRemainingPercent    bool
 	ResetAt                *time.Time
 }
 
@@ -38,16 +45,42 @@ type Usage struct {
 	Windows        []Window
 	ModelCount     int
 	QuotaAvailable bool
+	Source         string
 }
 
-func NewClient() *Client { return &Client{http: netutil.NewHTTPClient(20 * time.Second)} }
+func NewClient() *Client {
+	return &Client{
+		http:             netutil.NewHTTPClient(20 * time.Second),
+		quotaURL:         defaultQuotaURL,
+		accountReportURL: defaultAccountReportURL,
+		modelsURL:        defaultModelsURL,
+	}
+}
 
 func (c *Client) FetchUsage(ctx context.Context, credential Credential) (Usage, error) {
 	apiKey := strings.TrimSpace(credential.APIKey)
 	if apiKey == "" {
 		return Usage{}, fmt.Errorf("智谱 API Key 不能为空")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, quotaURL, nil)
+
+	// Coding Plan and the ordinary metered API are separate billing domains.
+	// Probe both before deciding that a key is invalid so an ordinary API key is
+	// never rejected merely because the account has no Coding Plan subscription.
+	if usage, err := c.fetchCodingPlan(ctx, apiKey); err == nil {
+		return usage, nil
+	}
+	if usage, err := c.fetchAccountBalance(ctx, apiKey); err == nil {
+		return usage, nil
+	}
+	usage, err := c.fetchModels(ctx, apiKey)
+	if err != nil {
+		return Usage{}, err
+	}
+	return usage, nil
+}
+
+func (c *Client) fetchCodingPlan(ctx context.Context, apiKey string) (Usage, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.quotaURL, nil)
 	if err != nil {
 		return Usage{}, err
 	}
@@ -67,19 +100,47 @@ func (c *Client) FetchUsage(ctx context.Context, credential Credential) (Usage, 
 		usage, parseErr := parseUsage(body)
 		if parseErr == nil {
 			usage.QuotaAvailable = true
+			usage.Source = "智谱 /api/monitor/usage/quota/limit"
 			return usage, nil
 		}
-		if !isNoCodingPlan(parseErr) {
-			return Usage{}, parseErr
-		}
-	} else if !isNoCodingPlanBody(body) {
-		return Usage{}, fmt.Errorf("智谱额度接口返回 HTTP %d", resp.StatusCode)
+		return Usage{}, parseErr
 	}
-	return c.fetchModels(ctx, apiKey)
+	if isNoCodingPlanBody(body) {
+		return Usage{}, fmt.Errorf("智谱账号未订阅 Coding Plan")
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return Usage{}, fmt.Errorf("智谱 Coding Plan 接口未接受该凭据")
+	}
+	return Usage{}, fmt.Errorf("智谱额度接口返回 HTTP %d", resp.StatusCode)
+}
+
+func (c *Client) fetchAccountBalance(ctx context.Context, apiKey string) (Usage, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.accountReportURL, nil)
+	if err != nil {
+		return Usage{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return Usage{}, fmt.Errorf("连接智谱按量余额接口失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
+		return Usage{}, fmt.Errorf("读取智谱按量余额响应失败: %w", err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return Usage{}, fmt.Errorf("智谱按量余额接口未接受该 API Key")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Usage{}, fmt.Errorf("智谱按量余额接口返回 HTTP %d", resp.StatusCode)
+	}
+	return parseAccountBalance(body)
 }
 
 func (c *Client) fetchModels(ctx context.Context, apiKey string) (Usage, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.modelsURL, nil)
 	if err != nil {
 		return Usage{}, err
 	}
@@ -106,7 +167,11 @@ func (c *Client) fetchModels(ctx context.Context, apiKey string) (Usage, error) 
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return Usage{}, fmt.Errorf("智谱模型响应不是有效 JSON: %w", err)
 	}
-	return Usage{Plan: fmt.Sprintf("开放平台 API Key · %d 个可用模型", len(payload.Data)), ModelCount: len(payload.Data)}, nil
+	return Usage{
+		Plan:       fmt.Sprintf("开放平台 API Key · %d 个可用模型", len(payload.Data)),
+		ModelCount: len(payload.Data),
+		Source:     "智谱官方 /api/paas/v4/models",
+	}, nil
 }
 
 func isNoCodingPlan(err error) bool {
@@ -117,7 +182,50 @@ func isNoCodingPlanBody(body []byte) bool { return isNoCodingPlanText(string(bod
 
 func isNoCodingPlanText(message string) bool {
 	message = strings.ToLower(message)
-	return strings.Contains(message, "不存在 coding plan") || strings.Contains(message, "not exist coding plan") || strings.Contains(message, "no coding plan")
+	compact := strings.NewReplacer(" ", "", "\t", "", "\r", "", "\n", "", "_", "", "-", "").Replace(message)
+	return strings.Contains(compact, "不存在codingplan") || strings.Contains(compact, "notexistcodingplan") || strings.Contains(compact, "nocodingplan")
+}
+
+func parseAccountBalance(body []byte) (Usage, error) {
+	var payload struct {
+		Code    any    `json:"code"`
+		Message string `json:"message"`
+		Msg     string `json:"msg"`
+		Success *bool  `json:"success"`
+		Data    struct {
+			AvailableBalance any `json:"availableBalance"`
+		} `json:"data"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return Usage{}, fmt.Errorf("智谱按量余额响应不是有效 JSON: %w", err)
+	}
+	code, hasCode := number(payload.Code)
+	if payload.Success != nil && !*payload.Success || hasCode && code != 0 && code != 200 {
+		message := strings.TrimSpace(payload.Message)
+		if message == "" {
+			message = strings.TrimSpace(payload.Msg)
+		}
+		if message == "" {
+			message = "认证或业务校验失败"
+		}
+		return Usage{}, fmt.Errorf("智谱按量余额接口返回业务错误: %s", message)
+	}
+	available, ok := number(payload.Data.AvailableBalance)
+	if !ok {
+		return Usage{}, fmt.Errorf("智谱按量余额响应缺少 data.availableBalance")
+	}
+	return Usage{
+		Plan:   "开放平台按量计费",
+		Source: "智谱 /api/biz/account/query-customer-account-report",
+		Windows: []Window{{
+			Label:     "账户可用余额",
+			Kind:      "balance",
+			Unit:      "CNY",
+			Remaining: available,
+		}},
+	}, nil
 }
 
 func parseUsage(body []byte) (Usage, error) {
@@ -176,7 +284,7 @@ func parseUsage(body []byte) (Usage, error) {
 		if strings.EqualFold(item.Type, "CREDIT_LIMIT") {
 			kind, unit = "credits", "credits"
 		}
-		window := Window{Kind: kind, Unit: unit, Used: used, Total: total, Remaining: remaining, RemainingPercent: remainingPercent, ResetAt: millisTime(item.NextResetTime)}
+		window := Window{Kind: kind, Unit: unit, Used: used, Total: total, Remaining: remaining, RemainingPercent: remainingPercent, HasRemainingPercent: true, ResetAt: millisTime(item.NextResetTime)}
 		switch item.Unit {
 		case 3:
 			window.Label = "5 小时限额"

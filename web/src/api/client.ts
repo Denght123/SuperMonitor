@@ -8,6 +8,38 @@ export type Provider = components['schemas']['Provider']
 export type DeviceLoginSession = components['schemas']['DeviceLoginSession']
 export type ActivityItem = components['schemas']['Activity']
 
+export type NotificationChannelKind = 'feishu' | 'qq_mail'
+
+export type NotificationChannel = {
+  id: string
+  kind: NotificationChannelKind
+  name: string
+  target: string
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type NotificationPolicy = {
+  lowQuotaPercent: number
+  resetReminderDays: number[]
+  schedulerMinutes: number
+  autoActivities: boolean
+}
+
+export type NotificationEvaluation = {
+  checkedAccounts: number
+  triggeredAlerts: number
+  deliveredMessages: number
+  failedMessages: number
+  availableActivities: number
+  completedActivities: number
+}
+
+export type NotificationChannelInput =
+  | { kind: 'feishu'; name: string; webhookUrl: string }
+  | { kind: 'qq_mail'; name: string; sender: string; authCode: string; recipient: string }
+
 type APIErrorShape = {
   error?: {
     code?: string
@@ -43,6 +75,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     )
   }
 
+  if (response.status === 204) return undefined as T
+
   return (await response.json()) as T
 }
 
@@ -74,6 +108,17 @@ export const api = {
   }),
   providerOAuthStatus: (providerId: string, id: string) => request<DeviceLoginSession>(`/providers/${encodeURIComponent(providerId)}/oauth/${encodeURIComponent(id)}`),
   refreshAccount: (id: string) => request<AccountSummary>(`/accounts/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
-  activities: () => request<{ items: ActivityItem[] }>('/activities'),
+  deleteAccount: (id: string) => request<void>(`/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  notificationChannels: () => request<{ items: NotificationChannel[] }>('/notifications/channels'),
+  notificationPolicy: () => request<NotificationPolicy>('/notifications/policy'),
+  createNotificationChannel: (input: NotificationChannelInput) => request<NotificationChannel>('/notifications/channels', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }),
+  deleteNotificationChannel: (id: string) => request<void>(`/notifications/channels/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  testNotificationChannel: (id: string) => request<{ status: string; message: string }>(`/notifications/channels/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+  evaluateNotifications: () => request<NotificationEvaluation>('/notifications/evaluate', { method: 'POST' }),
+  activities: () => request<{ items: ActivityItem[]; warning?: string }>('/activities'),
   runActivity: (accountId: string, activityId: string) => request<ActivityItem>(`/activities/${encodeURIComponent(accountId)}/${encodeURIComponent(activityId)}`, { method: 'POST' }),
 }

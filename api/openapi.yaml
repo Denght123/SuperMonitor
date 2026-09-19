@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: SuperMonitor API
-  version: 0.6.2
+  version: 0.7.0
   description: Monitoring-only API. It intentionally exposes no model proxy endpoints.
 servers:
   - url: /api/v1
@@ -224,6 +224,87 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AccountSummary" }
+  /accounts/{accountID}:
+    delete:
+      operationId: deleteAccount
+      parameters:
+        - in: path
+          name: accountID
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Account, encrypted credential, and cached quota windows deleted
+        "404":
+          description: Account does not exist or was already deleted
+  /notifications/channels:
+    get:
+      operationId: listNotificationChannels
+      responses:
+        "200":
+          description: Notification channel summaries without credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/NotificationChannel" }
+    post:
+      operationId: createNotificationChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationChannelInput" }
+      responses:
+        "201":
+          description: Encrypted notification channel created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationChannel" }
+  /notifications/channels/{channelID}:
+    delete:
+      operationId: deleteNotificationChannel
+      parameters:
+        - in: path
+          name: channelID
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Notification channel and delivery receipts deleted
+  /notifications/channels/{channelID}/test:
+    post:
+      operationId: testNotificationChannel
+      parameters:
+        - in: path
+          name: channelID
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Test notification accepted by the configured channel
+  /notifications/policy:
+    get:
+      operationId: getNotificationPolicy
+      responses:
+        "200":
+          description: Active local notification and activity policy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPolicy" }
+  /notifications/evaluate:
+    post:
+      operationId: evaluateNotifications
+      responses:
+        "200":
+          description: Quota alerts, reset reminders, and verified activities evaluated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationEvaluation" }
   /activities:
     get:
       operationId: listActivities
@@ -239,6 +320,9 @@ paths:
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/Activity" }
+                  warning:
+                    type: string
+                    description: Present when one or more connected activity accounts could not be checked
   /activities/{accountID}/{activityID}:
     post:
       operationId: runActivity
@@ -265,6 +349,47 @@ paths:
           description: Server-sent event stream
 components:
   schemas:
+    NotificationChannel:
+      type: object
+      required: [id, kind, name, target, enabled, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [feishu, qq_mail] }
+        name: { type: string }
+        target: { type: string, description: Masked target summary; credentials are never returned }
+        enabled: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    NotificationChannelInput:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [feishu, qq_mail] }
+        name: { type: string }
+        webhookUrl: { type: string, format: uri }
+        sender: { type: string, format: email }
+        authCode: { type: string, writeOnly: true }
+        recipient: { type: string, format: email }
+    NotificationPolicy:
+      type: object
+      required: [lowQuotaPercent, resetReminderDays, schedulerMinutes, autoActivities]
+      properties:
+        lowQuotaPercent: { type: integer }
+        resetReminderDays:
+          type: array
+          items: { type: integer }
+        schedulerMinutes: { type: integer }
+        autoActivities: { type: boolean }
+    NotificationEvaluation:
+      type: object
+      required: [checkedAccounts, triggeredAlerts, deliveredMessages, failedMessages, availableActivities, completedActivities]
+      properties:
+        checkedAccounts: { type: integer }
+        triggeredAlerts: { type: integer }
+        deliveredMessages: { type: integer }
+        failedMessages: { type: integer }
+        availableActivities: { type: integer }
+        completedActivities: { type: integer }
     Activity:
       type: object
       required: [id, accountId, accountAlias, providerId, provider, title, description, status, action]
@@ -276,7 +401,7 @@ components:
         provider: { type: string }
         title: { type: string }
         description: { type: string }
-        status: { type: string, enum: [available, completed] }
+        status: { type: string, enum: [available, completed, error] }
         action: { type: string }
     Overview:
       type: object

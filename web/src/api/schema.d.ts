@@ -196,6 +196,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/accounts/{accountID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteAccount"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNotificationChannels"];
+        put?: never;
+        post: operations["createNotificationChannel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/channels/{channelID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteNotificationChannel"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/channels/{channelID}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testNotificationChannel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getNotificationPolicy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["evaluateNotifications"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/activities": {
         parameters: {
             query?: never;
@@ -248,6 +344,45 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        NotificationChannel: {
+            id: string;
+            /** @enum {string} */
+            kind: "feishu" | "qq_mail";
+            name: string;
+            /** @description Masked target summary; credentials are never returned */
+            target: string;
+            enabled: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        NotificationChannelInput: {
+            /** @enum {string} */
+            kind: "feishu" | "qq_mail";
+            name?: string;
+            /** Format: uri */
+            webhookUrl?: string;
+            /** Format: email */
+            sender?: string;
+            authCode?: string;
+            /** Format: email */
+            recipient?: string;
+        };
+        NotificationPolicy: {
+            lowQuotaPercent: number;
+            resetReminderDays: number[];
+            schedulerMinutes: number;
+            autoActivities: boolean;
+        };
+        NotificationEvaluation: {
+            checkedAccounts: number;
+            triggeredAlerts: number;
+            deliveredMessages: number;
+            failedMessages: number;
+            availableActivities: number;
+            completedActivities: number;
+        };
         Activity: {
             id: string;
             accountId: string;
@@ -257,7 +392,7 @@ export interface components {
             title: string;
             description: string;
             /** @enum {string} */
-            status: "available" | "completed";
+            status: "available" | "completed" | "error";
             action: string;
         };
         Overview: {
@@ -701,6 +836,159 @@ export interface operations {
             };
         };
     };
+    deleteAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Account, encrypted credential, and cached quota windows deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Account does not exist or was already deleted */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listNotificationChannels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notification channel summaries without credentials */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["NotificationChannel"][];
+                    };
+                };
+            };
+        };
+    };
+    createNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationChannelInput"];
+            };
+        };
+        responses: {
+            /** @description Encrypted notification channel created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationChannel"];
+                };
+            };
+        };
+    };
+    deleteNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notification channel and delivery receipts deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    testNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Test notification accepted by the configured channel */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getNotificationPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Active local notification and activity policy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPolicy"];
+                };
+            };
+        };
+    };
+    evaluateNotifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Quota alerts, reset reminders, and verified activities evaluated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationEvaluation"];
+                };
+            };
+        };
+    };
     listActivities: {
         parameters: {
             query?: never;
@@ -718,6 +1006,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: components["schemas"]["Activity"][];
+                        /** @description Present when one or more connected activity accounts could not be checked */
+                        warning?: string;
                     };
                 };
             };

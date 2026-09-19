@@ -2,6 +2,30 @@
 
 All notable changes to SuperMonitor are documented here.
 
+## [0.7.0] - 2026-09-20
+
+### Added
+
+- Per-account deletion with explicit confirmation; the account, encrypted credential, cached quota windows, notification state, delivery receipts, and related active alerts are removed together.
+- Encrypted Feishu bot and QQ Mail SMTP notification channels with masked targets, test delivery, channel removal, and a manual evaluation view.
+- Persistent low-quota alerts at 15% or below, three-day and one-day reset reminders, per-channel delivery deduplication, recovery handling, and retry-safe scheduling.
+- Ten-minute discovery and automatic execution for the currently verified WorkBuddy CN daily check-in adapter, with Asia/Shanghai day boundaries and failure backoff.
+- Token trend ranges for 7 days, 30 days, one year, and all retained history.
+
+### Changed
+
+- Zhipu API-key handling now distinguishes Coding Plan quotas from ordinary Open Platform billing, reads the official available CNY balance when supported, and falls back to verified model access without reporting a false missing-plan error.
+- Notification and account-management settings now include complete loading, error, confirmation, disabled, empty, and responsive states in the existing compact visual system.
+- Activity status failures are now shown on their affected account card instead of being mistaken for an empty activity list.
+- Alert state is reconciled against the provider's current quota windows, so expired or removed windows no longer leave stale alerts behind.
+
+### Security
+
+- Feishu Webhooks and SMTP authorization codes are encrypted with the local AES-GCM vault and are never returned by the API.
+- Feishu delivery accepts only official HTTPS hosts and port 443, refuses redirects and ambiguous responses, and removes Webhook tokens from network errors and logs.
+- WorkBuddy automatic check-in requires an explicit boolean activity-status field; missing or malformed status data can no longer trigger a speculative check-in.
+- Account deletion is serialized with refresh and activity writes, and notification events plus alerts are stored atomically, preventing deleted accounts or orphan alerts from reappearing during concurrent work.
+
 ## [0.6.2] - 2026-09-19
 
 ### Changed

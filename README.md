@@ -2,7 +2,7 @@
 
 SuperMonitor is an open-source, self-hosted control plane for monitoring AI and coding-agent quotas, credits, balances, refresh windows, and usage history.
 
-> Current status: **v0.5 native provider connections**. Codex, WorkBuddy / CodeBuddy CN and Global, DeepSeek, Xiaomi MiMo, TokenRhythm, Zhipu, Gemini CLI, and Claude Code have dedicated live adapters. Platforms whose native protocol is not yet verified remain visibly disabled instead of exposing a generic field-mapping form.
+> Current status: **v0.7 account pools, native quota adapters, and local alerts**. Connected accounts use provider-specific OAuth, credential-file, API-key, access-key, Cookie, or session-token flows; unsupported data is never replaced with demo quota.
 
 ## Principles
 
@@ -19,11 +19,19 @@ SuperMonitor is an open-source, self-hosted control plane for monitoring AI and 
 - DeepSeek: enter an API key to read the official account balance.
 - Xiaomi MiMo: paste the authenticated console Cookie to read Token Plan usage and reset time.
 - TokenRhythm / 基元律动: paste a `sess_` browser session token or `tr_session` Cookie to read the CNY balance and expiry time from `tokenrhythm.studio`; it is a separate provider from Xiaomi MiMo.
-- Zhipu: enter an API key to read native five-hour and weekly Coding Plan windows, preserving credits versus percentage semantics.
+- Zhipu: enter an API key to read native Coding Plan windows or the ordinary Open Platform CNY balance; a valid non-Coding-Plan key is no longer rejected as a missing subscription.
 - Gemini CLI: import `oauth_creds.json` to read Code Assist model quota buckets. For unattended refresh after the access token expires, provide the deployment's own `SUPMON_GEMINI_OAUTH_CLIENT_ID` and `SUPMON_GEMINI_OAUTH_CLIENT_SECRET` environment variables.
 - Claude Code: import `.credentials.json` to read five-hour, weekly, and model-specific OAuth usage windows.
-- TRAE, Qoder, Coze, Bailian, Kiro, and Cursor remain disabled until their dedicated authentication and quota contracts are verified.
+- TRAE, Qoder CN/Global, Coze, Aliyun Bailian/BSS, Kiro, and Cursor use their dedicated verified connection and quota adapters.
 - Store every credential with AES-GCM using a random key created in `SUPMON_DATA_DIR`.
+
+## Alerts and verified activities
+
+- Add multiple Feishu custom-bot or QQ Mail SMTP channels; Webhooks and SMTP authorization codes remain AES-GCM encrypted and are never returned to the browser.
+- Notify once when a percentage-based quota reaches 15% or below, then re-arm after the quota recovers.
+- Notify once within three days and once within one day of a provider-reported reset time.
+- Scan every ten minutes and automatically execute only activities backed by a verified adapter. The current automatic activity is WorkBuddy CN daily check-in; failures use backoff instead of retrying every poll.
+- Delete an account and its credential, quota cache, active alerts, notification state, and delivery receipts together.
 
 On Windows, outbound provider clients honor proxy environment variables first and then the current user's Internet Settings proxy. This keeps the service on the same route as the browser for region-sensitive OAuth endpoints.
 
