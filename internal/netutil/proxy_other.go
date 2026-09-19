@@ -7,6 +7,6 @@ import (
 	"net/url"
 )
 
-func proxyFunc() func(*http.Request) (*url.URL, error) {
-	return http.ProxyFromEnvironment
+func platformProxy(_ *http.Request) (*url.URL, error) {
+	return nil, nil
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -97,6 +98,14 @@ func New(deps Dependencies) http.Handler {
 				account, err = deps.Accounts.ImportClaude(r.Context(), r.FormValue("alias"), body)
 			case "gemini-cli":
 				account, err = deps.Accounts.ImportGemini(r.Context(), r.FormValue("alias"), body)
+			case "qoder-cn", "qoder-global":
+				account, err = deps.Accounts.ImportQoder(r.Context(), providerID, r.FormValue("alias"), body)
+			case "cursor":
+				account, err = deps.Accounts.ImportCursor(r.Context(), r.FormValue("alias"), body)
+			case "kiro":
+				account, err = deps.Accounts.ImportKiro(r.Context(), r.FormValue("alias"), body)
+			case "trae-cn":
+				account, err = deps.Accounts.ImportTrae(r.Context(), r.FormValue("alias"), body)
 			default:
 				writeError(w, http.StatusBadRequest, "import_unsupported", "该平台不支持认证文件导入")
 				return
@@ -113,8 +122,9 @@ func New(deps Dependencies) http.Handler {
 				return
 			}
 			var payload struct {
-				Alias  string `json:"alias"`
-				Secret string `json:"secret"`
+				Alias   string `json:"alias"`
+				Secret  string `json:"secret"`
+				Secret2 string `json:"secret2"`
 			}
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&payload); err != nil {
 				writeError(w, http.StatusBadRequest, "invalid_payload", "请求内容无效")
@@ -123,6 +133,10 @@ func New(deps Dependencies) http.Handler {
 			var account any
 			var err error
 			switch chi.URLParam(r, "providerID") {
+			case "bailian":
+				account, err = deps.Accounts.ConnectAliyun(r.Context(), payload.Alias, payload.Secret, payload.Secret2)
+			case "coze-cn":
+				account, err = deps.Accounts.ConnectCoze(r.Context(), payload.Alias, payload.Secret)
 			case "deepseek":
 				account, err = deps.Accounts.ConnectDeepSeek(r.Context(), payload.Alias, payload.Secret)
 			case "mimo":
@@ -173,11 +187,28 @@ func New(deps Dependencies) http.Handler {
 				_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&payload)
 			}
 			providerID := chi.URLParam(r, "providerID")
-			if providerID != "workbuddy-cn" && providerID != "workbuddy-global" {
+			var session service.DeviceLoginSession
+			var err error
+			switch providerID {
+			case "workbuddy-cn", "workbuddy-global":
+				session, err = deps.Accounts.StartWorkBuddyOAuth(r.Context(), providerID, payload.Alias)
+			case "qoder-cn", "qoder-global":
+				session, err = deps.Accounts.StartQoderOAuth(providerID, payload.Alias)
+			case "cursor":
+				session, err = deps.Accounts.StartCursorOAuth(payload.Alias)
+			case "trae-cn":
+				session, err = deps.Accounts.StartTraeOAuth(r.Context(), payload.Alias)
+			case "kiro":
+				scheme := "http"
+				if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+					scheme = "https"
+				}
+				callbackURL := scheme + "://" + r.Host + "/api/v1/providers/kiro/oauth/callback"
+				session, err = deps.Accounts.StartKiroOAuth(payload.Alias, callbackURL)
+			default:
 				writeError(w, http.StatusBadRequest, "oauth_unsupported", "该平台暂不支持此 OAuth 流程")
 				return
 			}
-			session, err := deps.Accounts.StartWorkBuddyOAuth(r.Context(), providerID, payload.Alias)
 			if err != nil {
 				writeError(w, http.StatusBadGateway, "oauth_start_failed", err.Error())
 				return
@@ -191,6 +222,16 @@ func New(deps Dependencies) http.Handler {
 				return
 			}
 			writeJSON(w, http.StatusOK, session)
+		})
+		api.Get("/providers/kiro/oauth/callback", func(w http.ResponseWriter, r *http.Request) {
+			_, err := deps.Accounts.CompleteKiroOAuth(r.Context(), r.URL.Query())
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = fmt.Fprintf(w, "<!doctype html><meta charset=utf-8><title>Kiro 登录失败</title><style>body{font:16px system-ui;max-width:620px;margin:12vh auto;padding:24px;color:#322}main{border:1px solid #e2d8d4;border-radius:14px;padding:26px}p{line-height:1.7}</style><main><h1>Kiro 登录失败</h1><p>%s</p><p>请关闭此页面，回到 SuperMonitor 重新发起。</p></main>", html.EscapeString(err.Error()))
+				return
+			}
+			_, _ = fmt.Fprint(w, "<!doctype html><meta charset=utf-8><title>Kiro 登录成功</title><style>body{font:16px system-ui;max-width:620px;margin:12vh auto;padding:24px;color:#173d31}main{border:1px solid #cfe4db;border-radius:14px;padding:26px}p{line-height:1.7}</style><main><h1>Kiro 登录成功</h1><p>真实额度已写入 SuperMonitor。你现在可以关闭此页面。</p><script>setTimeout(()=>window.close(),1200)</script></main>")
 		})
 		api.Post("/providers/codex/accounts/import", func(w http.ResponseWriter, r *http.Request) {
 			if deps.Accounts == nil {

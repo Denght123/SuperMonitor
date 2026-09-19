@@ -78,7 +78,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.5.0</small></div>
+        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.6.0</small></div>
       </aside>
 
       <main className="main-stage">
@@ -209,13 +209,18 @@ function ProviderConnectDialog({ provider, onClose, onConnected }: { provider: P
   const [alias, setAlias] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [secret, setSecret] = useState('')
+	const [secret2, setSecret2] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [session, setSession] = useState<DeviceLoginSession | null>(null)
   const isCodex = provider.id === 'codex'
   const isWorkBuddy = provider.id === 'workbuddy-cn' || provider.id === 'workbuddy-global'
-  const isFileImport = isCodex || isWorkBuddy || provider.id === 'claude-code' || provider.id === 'gemini-cli'
-  const isSecret = ['deepseek', 'mimo', 'zhipu', 'tokenrhythm'].includes(provider.id)
+  const isQoder = provider.id === 'qoder-cn' || provider.id === 'qoder-global'
+  const isCursor = provider.id === 'cursor'
+  const isKiro = provider.id === 'kiro'
+  const isFileImport = isCodex || isWorkBuddy || isQoder || isCursor || isKiro || provider.id === 'trae-cn' || provider.id === 'claude-code' || provider.id === 'gemini-cli'
+  const isOAuth = isCodex || isWorkBuddy || isQoder || isCursor || isKiro || provider.id === 'trae-cn'
+  const isSecret = ['bailian', 'coze-cn', 'deepseek', 'mimo', 'zhipu', 'tokenrhythm'].includes(provider.id)
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
@@ -247,13 +252,13 @@ function ProviderConnectDialog({ provider, onClose, onConnected }: { provider: P
       const next = isCodex ? await api.startCodexDeviceLogin(alias) : await api.startProviderOAuth(provider.id, alias)
       setSession(next)
       setBusy(false)
-      if (isCodex) window.open(next.verifyUrl, '_blank', 'noopener,noreferrer')
+      if (!isWorkBuddy) window.open(next.verifyUrl, '_blank', 'noopener,noreferrer')
     } catch (reason) { setError(reason instanceof Error ? reason.message : '无法启动登录'); setBusy(false) }
   }
   const connectSecret = async () => {
-    if (!secret.trim()) { setError(secretConfig(provider.id).emptyError); return }
+    if (!secret.trim() || (provider.id === 'bailian' && !secret2.trim())) { setError(secretConfig(provider.id).emptyError); return }
     setBusy(true); setError('')
-    try { await api.connectSecret(provider.id, alias, secret); setSecret(''); onConnected() } catch (reason) { setSecret(''); setError(reason instanceof Error ? reason.message : '连接失败'); setBusy(false) }
+    try { await api.connectSecret(provider.id, alias, secret, secret2); setSecret(''); setSecret2(''); onConnected() } catch (reason) { setError(reason instanceof Error ? reason.message : '连接失败'); setBusy(false) }
   }
   const fileCopy = credentialFileCopy(provider.id)
   const secretCopy = secretConfig(provider.id)
@@ -261,11 +266,11 @@ function ProviderConnectDialog({ provider, onClose, onConnected }: { provider: P
   return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
     <section className="connect-dialog" role="dialog" aria-modal="true" aria-labelledby="connect-title">
       <header><div className="connect-title-row"><ProviderLogo providerId={provider.id} name={provider.name} size={30} /><div><span className="adapter-state live">真实连接</span><h2 id="connect-title">连接 {provider.name}</h2><p>{provider.description}</p></div></div><button className="close-button" onClick={onClose} aria-label="关闭连接窗口"><X size={20} /></button></header>
-      {session ? <div className="device-panel"><div className="qr-shell"><QRCodeSVG value={session.verifyUrl} size={180} bgColor="transparent" fgColor="currentColor" /></div><div><span className="field-label">{isCodex ? 'OpenAI 官方设备验证码' : '官方扫码登录'}</span>{session.userCode ? <strong className="device-code">{session.userCode}</strong> : null}<p>{isCodex ? '扫描二维码或打开官方页面，输入验证码完成登录。' : '用手机扫描左侧二维码，在 WorkBuddy / CodeBuddy 官方页面完成授权。'} 页面会自动检测结果并读取真实额度。</p><a className="primary-button" href={session.verifyUrl} target="_blank" rel="noreferrer">打开官方登录页 <ExternalLink size={17} /></a><span className="login-status"><LoaderCircle className={session.status === 'pending' ? 'spin' : ''} size={17} />{session.message}</span>{error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}</div></div> : <div className="connect-body">
+      {session ? <div className="device-panel"><div className="qr-shell"><QRCodeSVG value={session.verifyUrl} size={180} bgColor="transparent" fgColor="currentColor" /></div><div><span className="field-label">{isCodex ? 'OpenAI 官方设备验证码' : `${provider.name} 官方登录`}</span>{session.userCode ? <strong className="device-code">{session.userCode}</strong> : null}<p>{isCodex ? '扫描二维码或打开官方页面，输入验证码完成登录。' : `打开或扫描官方页面，完成 ${provider.name} 账号授权。`} 页面会自动检测结果并读取真实额度。</p><a className="primary-button" href={session.verifyUrl} target="_blank" rel="noreferrer">打开官方登录页 <ExternalLink size={17} /></a><span className="login-status"><LoaderCircle className={session.status === 'pending' ? 'spin' : ''} size={17} />{session.message}</span>{error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}</div></div> : <div className="connect-body">
         <label><span className="field-label">账号备注（可选）</span><input value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="例如：工作账号" /></label>
         {isFileImport ? <div className="auth-method"><div><FileJson size={22} /><span><strong>{fileCopy.title}</strong><small>{fileCopy.detail}</small></span></div><label className="file-picker"><Upload size={17} />{file ? file.name : '选择认证文件'}<input type="file" accept={fileCopy.accept} onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label><button className="primary-button" onClick={() => void importFile()} disabled={busy || !file}>{busy ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />}导入并读取真实额度</button></div> : null}
-        {(isCodex || isWorkBuddy) ? <><div className="method-divider"><span>或</span></div><div className="auth-method device"><div><Globe2 size={22} /><span><strong>{isCodex ? 'OpenAI 官方设备登录' : '官方二维码登录'}</strong><small>授权完成后自动写入本机保险箱并读取实时额度</small></span></div><button className="secondary-button" onClick={() => void startOAuth()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <ExternalLink size={17} />}{isCodex ? '获取登录验证码' : '生成登录二维码'}</button></div></> : null}
-        {isSecret ? <div className="auth-method"><div><KeyRound size={22} /><span><strong>{secretCopy.title}</strong><small>{secretCopy.detail}</small></span></div>{secretCopy.multiline ? <textarea className="secret-textarea" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={secretCopy.placeholder} rows={5} /> : <input className="secret-input" type="password" autoComplete="off" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={secretCopy.placeholder} />}<button className="primary-button" onClick={() => void connectSecret()} disabled={busy || !secret.trim()}>{busy ? <LoaderCircle className="spin" size={17} /> : <KeyRound size={17} />}{secretCopy.action}</button></div> : null}
+        {isOAuth ? <><div className="method-divider"><span>或</span></div><div className="auth-method device"><div><Globe2 size={22} /><span><strong>{isCodex ? 'OpenAI 官方设备登录' : `${provider.name} 官方登录`}</strong><small>授权完成后自动写入本机保险箱并读取实时额度</small></span></div><button className="secondary-button" onClick={() => void startOAuth()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <ExternalLink size={17} />}{isCodex ? '获取登录验证码' : isWorkBuddy ? '生成登录二维码' : '打开官方登录'}</button></div></> : null}
+        {isSecret ? <div className="auth-method"><div><KeyRound size={22} /><span><strong>{secretCopy.title}</strong><small>{secretCopy.detail}</small></span></div>{secretCopy.multiline ? <textarea className="secret-textarea" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={secretCopy.placeholder} rows={5} /> : <input className="secret-input" type="password" autoComplete="off" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={secretCopy.placeholder} />}{provider.id === 'bailian' ? <input className="secret-input" type="password" autoComplete="off" value={secret2} onChange={(event) => setSecret2(event.target.value)} placeholder="AccessKey Secret" /> : null}{secretCopy.loginUrl ? <details className="login-guide"><summary>如何获取登录凭据</summary><ol><li><a href={secretCopy.loginUrl} target="_blank" rel="noreferrer">打开 {provider.name} 官方登录页 <ExternalLink size={14} /></a>，完成账号登录。</li><li>按 F12 打开开发者工具，进入“应用 / Application” → “Cookies”。</li><li>{provider.id === 'mimo' ? '选择 platform.xiaomimimo.com，复制完整 Cookie 请求头。' : provider.id === 'coze-cn' ? '选择 www.coze.cn，复制完整 Cookie 请求头；不要只复制某一个字段。' : '选择 tokenrhythm.studio，复制 tr_session；如有 tr_ref_device 一并复制。'}</li></ol></details> : null}<button className="primary-button" onClick={() => void connectSecret()} disabled={busy || !secret.trim() || (provider.id === 'bailian' && !secret2.trim())}>{busy ? <LoaderCircle className="spin" size={17} /> : <KeyRound size={17} />}{secretCopy.action}</button></div> : null}
         {error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}<p className="security-copy"><ShieldCheck size={17} />认证内容只发送到本机后端，并使用 AES-GCM 加密保存；页面不会回显 token、API Key 或 Cookie。</p>
       </div>}
     </section>
@@ -279,16 +284,23 @@ function credentialFileCopy(providerId: string) {
     'workbuddy-global': { title: '导入 WorkBuddy 国际版凭据', detail: '支持 WorkBuddy Switch 导出的 .info / JSON 文件。', accept: 'application/json,.json,.info' },
     'claude-code': { title: '导入 Claude Code OAuth 凭据', detail: '选择 Claude Code 的 .credentials.json，自动读取 5 小时与周限额。', accept: 'application/json,.json' },
     'gemini-cli': { title: '导入 Gemini CLI OAuth 凭据', detail: '选择 Gemini CLI 的 oauth_creds.json 读取各模型额度；过期后可重新导入，或在部署端配置 OAuth 客户端参数自动刷新。', accept: 'application/json,.json' },
+		'qoder-cn': { title: '导入 Qoder CN 认证文件', detail: '支持 Qoder / CPA 导出的 dt-/drt- 或 jt-/jrt- JSON；也可以使用下方官方设备登录。', accept: 'application/json,.json' },
+		'qoder-global': { title: '导入 Qoder 国际版认证文件', detail: '支持 Qoder / CPA 导出的认证 JSON；也可以使用下方官方设备登录。', accept: 'application/json,.json' },
+		cursor: { title: '导入 Cursor 认证 JSON', detail: '支持 accessToken / refreshToken JSON；推荐使用下方 Cursor 官方网页登录。', accept: 'application/json,.json' },
+		kiro: { title: '导入 Kiro 认证 JSON', detail: '支持 Kiro 官方缓存/账号工具导出的 accessToken、refreshToken 与 profileArn；推荐使用下方官方网页登录。', accept: 'application/json,.json' },
+		'trae-cn': { title: '导入 TRAE CN 认证 JSON', detail: '支持 TRAE 账号工具或 CPA 插件导出的 accessToken/deviceId JSON；本机部署推荐使用下方官方网页登录。', accept: 'application/json,.json' },
   }
   return copies[providerId] ?? { title: '导入认证文件', detail: '导入该平台的本地认证文件。', accept: 'application/json,.json' }
 }
 
 function secretConfig(providerId: string) {
-  const copies: Record<string, { title: string; detail: string; placeholder: string; action: string; emptyError: string; multiline?: boolean }> = {
+  const copies: Record<string, { title: string; detail: string; placeholder: string; action: string; emptyError: string; multiline?: boolean; loginUrl?: string }> = {
+		bailian: { title: '阿里云 RAM 只读 AccessKey', detail: '调用阿里云官方 BSS QueryAccountBalance。请使用专用 RAM 用户并授予 AliyunBSSReadOnlyAccess；这是阿里云账户级余额，不是虚构的 Token Plan 数据。', placeholder: 'AccessKey ID（LTAI...）', action: '验证并读取阿里云余额', emptyError: '请同时填写 AccessKey ID 与 AccessKey Secret' },
+		'coze-cn': { title: '扣子官网网页登录态', detail: '扣子目前没有面向额度监控的公开 OAuth scope；使用官网 Cookie 调用站点自身的 /credit/balance 接口读取积分。', placeholder: '粘贴 www.coze.cn 的完整 Cookie', action: '验证并读取扣子积分', emptyError: '请粘贴扣子官网 Cookie', multiline: true, loginUrl: 'https://www.coze.cn/' },
     deepseek: { title: 'DeepSeek API Key', detail: '调用官方 /user/balance 接口读取人民币账户余额。', placeholder: 'sk-...', action: '验证并读取余额', emptyError: '请输入 DeepSeek API Key' },
     zhipu: { title: '智谱开放平台 API Key', detail: '自动调用 Coding Plan 额度接口，按真实字段展示积分或限额窗口。', placeholder: '粘贴 open.bigmodel.cn API Key', action: '验证并读取额度', emptyError: '请输入智谱 API Key' },
-    mimo: { title: '小米 MiMo 控制台 Cookie', detail: '仅用于读取小米 MiMo Token Plan；与基元律动完全独立。', placeholder: '在 platform.xiaomimimo.com 登录后复制请求 Cookie', action: '验证并读取 Token Plan', emptyError: '请粘贴小米 MiMo 控制台 Cookie', multiline: true },
-    tokenrhythm: { title: '基元律动网页登录态', detail: '华为相关的 tokenrhythm.studio 账号；支持 sess_ 会话令牌或包含 tr_session / tr_ref_device 的 Cookie。', placeholder: 'sess_...\n或 tr_session=sess_...; tr_ref_device=...', action: '验证并读取人民币余额', emptyError: '请粘贴基元律动 sess_ 会话令牌或 Cookie', multiline: true },
+    mimo: { title: '小米 MiMo 控制台 Cookie', detail: '仅用于读取小米 MiMo Token Plan；与华为基元律动完全独立。平台未提供可用于额度读取的 OAuth，因此提供官方登录跳转与逐步获取教程。', placeholder: '在 platform.xiaomimimo.com 登录后复制请求 Cookie', action: '验证并读取 Token Plan', emptyError: '请粘贴小米 MiMo 控制台 Cookie', multiline: true, loginUrl: 'https://platform.xiaomimimo.com/' },
+    tokenrhythm: { title: '基元律动网页登录态', detail: '华为基元律动 tokenrhythm.studio；支持 sess_ 会话令牌或 tr_session / tr_ref_device Cookie。与小米 MiMo 完全独立。', placeholder: 'sess_...\n或 tr_session=sess_...; tr_ref_device=...', action: '验证并读取人民币余额', emptyError: '请粘贴基元律动 sess_ 会话令牌或 Cookie', multiline: true, loginUrl: 'https://tokenrhythm.studio/' },
   }
   return copies[providerId] ?? { title: '认证信息', detail: '用于读取真实额度。', placeholder: '', action: '验证并连接', emptyError: '请输入认证信息' }
 }
@@ -312,4 +324,4 @@ function EmptyState({ title, detail }: { title: string; detail: string }) { retu
 function DashboardSkeleton() { return <div className="skeleton-grid">{Array.from({ length: 8 }).map((_, index) => <i key={index} />)}</div> }
 function formatDateTime(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
 function capabilityLabel(value: string) { return ({ quota: '额度', usage: '用量', credits: '积分', balance: '余额', token_plan: 'Token Plan', checkin: '签到' } as Record<string, string>)[value] ?? value }
-function authMethodLabel(value?: string) { return ({ credential_import: '认证文件导入', device_code: '官方设备登录', oauth_qr: '官方二维码登录', api_key: 'API Key', cookie: '控制台 Cookie', session_token: '网页登录态' } as Record<string, string>)[value ?? ''] ?? (value || '未记录') }
+function authMethodLabel(value?: string) { return ({ credential_import: '认证文件导入', device_code: '官方设备登录', oauth: '官方网页登录', oauth_qr: '官方二维码登录', api_key: 'API Key', access_key: 'RAM AccessKey', cookie: '控制台 Cookie', session_token: '网页登录态' } as Record<string, string>)[value ?? ''] ?? (value || '未记录') }

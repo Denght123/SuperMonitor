@@ -62,7 +62,7 @@ func (c *Client) FetchUsage(ctx context.Context, credential Credential) (Usage, 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Cookie", "tr_session="+token+"; tr_ref_device="+strings.TrimSpace(credential.RefDevice))
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 SuperMonitor/0.5.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 SuperMonitor/0.6.0")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return Usage{}, fmt.Errorf("连接基元律动余额接口失败: %w", err)

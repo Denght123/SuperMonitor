@@ -55,10 +55,10 @@ export const api = {
     if (alias.trim()) body.append('alias', alias.trim())
     return request<AccountSummary>(`/providers/${encodeURIComponent(providerId)}/accounts/import`, { method: 'POST', body })
   },
-  connectSecret: (providerId: string, alias: string, secret: string) => request<AccountSummary>(`/providers/${encodeURIComponent(providerId)}/accounts/secret`, {
+  connectSecret: (providerId: string, alias: string, secret: string, secret2 = '') => request<AccountSummary>(`/providers/${encodeURIComponent(providerId)}/accounts/secret`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ alias: alias.trim(), secret }),
+    body: JSON.stringify({ alias: alias.trim(), secret, secret2 }),
   }),
   startCodexDeviceLogin: (alias: string) => request<DeviceLoginSession>('/providers/codex/device-login', {
     method: 'POST',

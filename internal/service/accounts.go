@@ -4,18 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Denght123/SuperMonitor/internal/domain"
+	"github.com/Denght123/SuperMonitor/internal/integration/aliyunbss"
 	"github.com/Denght123/SuperMonitor/internal/integration/claude"
 	"github.com/Denght123/SuperMonitor/internal/integration/codex"
+	"github.com/Denght123/SuperMonitor/internal/integration/coze"
+	"github.com/Denght123/SuperMonitor/internal/integration/cursor"
 	"github.com/Denght123/SuperMonitor/internal/integration/deepseek"
 	"github.com/Denght123/SuperMonitor/internal/integration/gemini"
 	"github.com/Denght123/SuperMonitor/internal/integration/genericquota"
+	"github.com/Denght123/SuperMonitor/internal/integration/kiro"
 	"github.com/Denght123/SuperMonitor/internal/integration/mimo"
+	"github.com/Denght123/SuperMonitor/internal/integration/qoder"
 	"github.com/Denght123/SuperMonitor/internal/integration/tokenrhythm"
+	"github.com/Denght123/SuperMonitor/internal/integration/trae"
 	"github.com/Denght123/SuperMonitor/internal/integration/workbuddy"
 	"github.com/Denght123/SuperMonitor/internal/integration/zhipu"
 	"github.com/Denght123/SuperMonitor/internal/secure"
@@ -26,18 +33,30 @@ import (
 type Accounts struct {
 	store       *sqlite.Store
 	vault       *secure.Vault
+	aliyun      *aliyunbss.Client
 	claude      *claude.Client
 	codex       *codex.Client
+	coze        *coze.Client
+	cursor      *cursor.Client
 	deepseek    *deepseek.Client
 	gemini      *gemini.Client
 	generic     *genericquota.Client
+	kiro        *kiro.Client
 	mimo        *mimo.Client
+	qoder       *qoder.Client
 	tokenrhythm *tokenrhythm.Client
+	trae        *trae.Client
 	workbuddy   *workbuddy.Client
 	zhipu       *zhipu.Client
 	events      *EventHub
 	mu          sync.RWMutex
 	sessions    map[string]*DeviceLoginSession
+	kiroPending map[string]kiroLoginMeta
+}
+
+type kiroLoginMeta struct {
+	SessionID string
+	Alias     string
 }
 
 type DeviceLoginSession struct {
@@ -52,7 +71,7 @@ type DeviceLoginSession struct {
 }
 
 func NewAccounts(store *sqlite.Store, vault *secure.Vault, events *EventHub) *Accounts {
-	return &Accounts{store: store, vault: vault, claude: claude.NewClient(), codex: codex.NewClient(), deepseek: deepseek.NewClient(), gemini: gemini.NewClient(), generic: genericquota.NewClient(), mimo: mimo.NewClient(), tokenrhythm: tokenrhythm.NewClient(), workbuddy: workbuddy.NewClient(), zhipu: zhipu.NewClient(), events: events, sessions: make(map[string]*DeviceLoginSession)}
+	return &Accounts{store: store, vault: vault, aliyun: aliyunbss.NewClient(), claude: claude.NewClient(), codex: codex.NewClient(), coze: coze.NewClient(), cursor: cursor.NewClient(), deepseek: deepseek.NewClient(), gemini: gemini.NewClient(), generic: genericquota.NewClient(), kiro: kiro.NewClient(), mimo: mimo.NewClient(), qoder: qoder.NewClient(), tokenrhythm: tokenrhythm.NewClient(), trae: trae.NewClient(), workbuddy: workbuddy.NewClient(), zhipu: zhipu.NewClient(), events: events, sessions: make(map[string]*DeviceLoginSession), kiroPending: make(map[string]kiroLoginMeta)}
 }
 
 func (s *Accounts) ImportCodex(ctx context.Context, alias string, raw []byte) (domain.AccountSummary, error) {
@@ -97,6 +116,42 @@ func (s *Accounts) ImportGemini(ctx context.Context, alias string, raw []byte) (
 	return s.connectGeminiWithID(ctx, "gemini-cli-"+uuid.NewString(), alias, credential)
 }
 
+func (s *Accounts) ImportQoder(ctx context.Context, providerID, alias string, raw []byte) (domain.AccountSummary, error) {
+	region := qoder.RegionGlobal
+	if providerID == "qoder-cn" {
+		region = qoder.RegionCN
+	}
+	credential, err := qoder.ParseCredential(raw, region)
+	if err != nil {
+		return domain.AccountSummary{}, err
+	}
+	return s.connectQoderWithID(ctx, providerID+"-"+uuid.NewString(), providerID, alias, "credential_import", credential)
+}
+
+func (s *Accounts) ImportCursor(ctx context.Context, alias string, raw []byte) (domain.AccountSummary, error) {
+	credential, err := cursor.ParseCredential(raw)
+	if err != nil {
+		return domain.AccountSummary{}, err
+	}
+	return s.connectCursorWithID(ctx, "cursor-"+uuid.NewString(), alias, "credential_import", credential)
+}
+
+func (s *Accounts) ImportKiro(ctx context.Context, alias string, raw []byte) (domain.AccountSummary, error) {
+	credential, err := kiro.ParseCredential(raw)
+	if err != nil {
+		return domain.AccountSummary{}, err
+	}
+	return s.connectKiroWithID(ctx, "kiro-"+uuid.NewString(), alias, "credential_import", credential)
+}
+
+func (s *Accounts) ImportTrae(ctx context.Context, alias string, raw []byte) (domain.AccountSummary, error) {
+	credential, err := trae.ParseCredential(raw)
+	if err != nil {
+		return domain.AccountSummary{}, err
+	}
+	return s.connectTraeWithID(ctx, "trae-cn-"+uuid.NewString(), alias, "credential_import", credential)
+}
+
 func (s *Accounts) ConnectDeepSeek(ctx context.Context, alias, apiKey string) (domain.AccountSummary, error) {
 	return s.connectDeepSeekWithID(ctx, "deepseek-"+uuid.NewString(), alias, deepseek.Credential{APIKey: strings.TrimSpace(apiKey)})
 }
@@ -119,6 +174,22 @@ func (s *Accounts) ConnectTokenRhythm(ctx context.Context, alias, rawCredential 
 		return domain.AccountSummary{}, err
 	}
 	return s.connectTokenRhythmWithID(ctx, "tokenrhythm-"+uuid.NewString(), alias, credential)
+}
+
+func (s *Accounts) ConnectAliyun(ctx context.Context, alias, accessKeyID, accessKeySecret string) (domain.AccountSummary, error) {
+	credential, err := aliyunbss.Normalize(accessKeyID, accessKeySecret)
+	if err != nil {
+		return domain.AccountSummary{}, err
+	}
+	return s.connectAliyunWithID(ctx, "bailian-"+uuid.NewString(), alias, credential)
+}
+
+func (s *Accounts) ConnectCoze(ctx context.Context, alias, cookie string) (domain.AccountSummary, error) {
+	credential, err := coze.NormalizeCookie(cookie)
+	if err != nil {
+		return domain.AccountSummary{}, err
+	}
+	return s.connectCozeWithID(ctx, "coze-cn-"+uuid.NewString(), alias, credential)
 }
 
 func (s *Accounts) ConnectGeneric(ctx context.Context, providerID, alias string, credential genericquota.Credential) (domain.AccountSummary, error) {
@@ -195,6 +266,162 @@ func (s *Accounts) StartWorkBuddyOAuth(ctx context.Context, providerID, alias st
 	return session, nil
 }
 
+func (s *Accounts) StartQoderOAuth(providerID, alias string) (DeviceLoginSession, error) {
+	region := qoder.RegionGlobal
+	if providerID == "qoder-cn" {
+		region = qoder.RegionCN
+	}
+	challenge, err := qoder.StartLogin(region)
+	if err != nil {
+		return DeviceLoginSession{}, err
+	}
+	session := DeviceLoginSession{ID: uuid.NewString(), Provider: providerID, Status: "pending", VerifyURL: challenge.VerifyURL, ExpiresAt: challenge.ExpiresAt, Message: "等待在 Qoder 官方页面完成设备授权"}
+	s.saveSession(&session)
+	go func(sessionID string) {
+		loginCtx, cancel := context.WithDeadline(context.Background(), challenge.ExpiresAt)
+		defer cancel()
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			credential, pending, pollErr := s.qoder.PollLogin(loginCtx, challenge)
+			if pollErr != nil {
+				s.updateDeviceSession(sessionID, "failed", "", friendlyLoginError(pollErr))
+				return
+			}
+			if !pending {
+				account, connectErr := s.connectQoderWithID(loginCtx, providerID+"-"+uuid.NewString(), providerID, alias, "device_code", credential)
+				if connectErr != nil {
+					s.updateDeviceSession(sessionID, "failed", "", connectErr.Error())
+					return
+				}
+				s.updateDeviceSession(sessionID, "completed", account.ID, "登录成功，Qoder 真实额度已写入账号池")
+				return
+			}
+			select {
+			case <-loginCtx.Done():
+				s.updateDeviceSession(sessionID, "failed", "", "登录已超时，请重新发起")
+				return
+			case <-ticker.C:
+			}
+		}
+	}(session.ID)
+	return session, nil
+}
+
+func (s *Accounts) StartCursorOAuth(alias string) (DeviceLoginSession, error) {
+	challenge, err := cursor.StartLogin()
+	if err != nil {
+		return DeviceLoginSession{}, err
+	}
+	session := DeviceLoginSession{ID: uuid.NewString(), Provider: "cursor", Status: "pending", VerifyURL: challenge.VerifyURL, ExpiresAt: challenge.ExpiresAt, Message: "等待在 Cursor 官方页面完成登录"}
+	s.saveSession(&session)
+	go func(sessionID string) {
+		loginCtx, cancel := context.WithDeadline(context.Background(), challenge.ExpiresAt)
+		defer cancel()
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			credential, pending, pollErr := s.cursor.PollLogin(loginCtx, challenge)
+			if pollErr != nil {
+				s.updateDeviceSession(sessionID, "failed", "", friendlyLoginError(pollErr))
+				return
+			}
+			if !pending {
+				account, connectErr := s.connectCursorWithID(loginCtx, "cursor-"+uuid.NewString(), alias, "oauth", credential)
+				if connectErr != nil {
+					s.updateDeviceSession(sessionID, "failed", "", connectErr.Error())
+					return
+				}
+				s.updateDeviceSession(sessionID, "completed", account.ID, "登录成功，Cursor 订阅额度已写入账号池")
+				return
+			}
+			select {
+			case <-loginCtx.Done():
+				s.updateDeviceSession(sessionID, "failed", "", "登录已超时，请重新发起")
+				return
+			case <-ticker.C:
+			}
+		}
+	}(session.ID)
+	return session, nil
+}
+
+func (s *Accounts) StartTraeOAuth(ctx context.Context, alias string) (DeviceLoginSession, error) {
+	challenge, err := s.trae.StartLogin(ctx)
+	if err != nil {
+		return DeviceLoginSession{}, err
+	}
+	session := DeviceLoginSession{ID: uuid.NewString(), Provider: "trae-cn", Status: "pending", VerifyURL: challenge.VerifyURL, ExpiresAt: challenge.ExpiresAt, Message: "等待在 TRAE CN 官方页面完成登录"}
+	s.saveSession(&session)
+	go func(sessionID string) {
+		loginCtx, cancel := context.WithDeadline(context.Background(), challenge.ExpiresAt)
+		defer cancel()
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			credential, pending, pollErr := s.trae.PollLogin(loginCtx, challenge)
+			if pollErr != nil {
+				s.updateDeviceSession(sessionID, "failed", "", friendlyLoginError(pollErr))
+				return
+			}
+			if !pending {
+				account, connectErr := s.connectTraeWithID(loginCtx, "trae-cn-"+uuid.NewString(), alias, "oauth", credential)
+				if connectErr != nil {
+					s.updateDeviceSession(sessionID, "failed", "", connectErr.Error())
+					return
+				}
+				s.updateDeviceSession(sessionID, "completed", account.ID, "登录成功，TRAE 真实积分包已写入账号池")
+				return
+			}
+			select {
+			case <-loginCtx.Done():
+				s.updateDeviceSession(sessionID, "failed", "", "登录已超时，请重新发起")
+				return
+			case <-ticker.C:
+			}
+		}
+	}(session.ID)
+	return session, nil
+}
+
+func (s *Accounts) StartKiroOAuth(alias, callbackURL string) (DeviceLoginSession, error) {
+	challenge, err := s.kiro.StartLogin(callbackURL)
+	if err != nil {
+		return DeviceLoginSession{}, err
+	}
+	session := DeviceLoginSession{ID: uuid.NewString(), Provider: "kiro", Status: "pending", VerifyURL: challenge.VerifyURL, ExpiresAt: challenge.ExpiresAt, Message: "等待在 Kiro 官方页面使用 Google 或 GitHub 完成登录"}
+	s.mu.Lock()
+	s.sessions[session.ID] = &session
+	s.kiroPending[challenge.State] = kiroLoginMeta{SessionID: session.ID, Alias: alias}
+	s.mu.Unlock()
+	return session, nil
+}
+
+func (s *Accounts) CompleteKiroOAuth(ctx context.Context, values url.Values) (string, error) {
+	state := values.Get("state")
+	s.mu.RLock()
+	meta, ok := s.kiroPending[state]
+	s.mu.RUnlock()
+	if !ok {
+		return "", fmt.Errorf("Kiro 登录会话不存在或已过期")
+	}
+	_, credential, err := s.kiro.CompleteLogin(ctx, values)
+	if err != nil {
+		s.updateDeviceSession(meta.SessionID, "failed", "", err.Error())
+		return meta.SessionID, err
+	}
+	account, err := s.connectKiroWithID(ctx, "kiro-"+uuid.NewString(), meta.Alias, "oauth", credential)
+	if err != nil {
+		s.updateDeviceSession(meta.SessionID, "failed", "", err.Error())
+		return meta.SessionID, err
+	}
+	s.mu.Lock()
+	delete(s.kiroPending, state)
+	s.mu.Unlock()
+	s.updateDeviceSession(meta.SessionID, "completed", account.ID, "登录成功，Kiro 真实额度已写入账号池")
+	return meta.SessionID, nil
+}
+
 func (s *Accounts) DeviceLoginStatus(id string) (DeviceLoginSession, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -215,6 +442,12 @@ func (s *Accounts) RefreshOne(ctx context.Context, id string) (domain.AccountSum
 		return domain.AccountSummary{}, err
 	}
 	switch account.ProviderID {
+	case "bailian":
+		var credential aliyunbss.Credential
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			return domain.AccountSummary{}, credentialError(err)
+		}
+		return s.connectAliyunWithID(ctx, account.ID, account.Alias, credential)
 	case "claude-code":
 		var credential claude.Credential
 		if err := json.Unmarshal(plain, &credential); err != nil {
@@ -227,6 +460,18 @@ func (s *Accounts) RefreshOne(ctx context.Context, id string) (domain.AccountSum
 			return domain.AccountSummary{}, credentialError(err)
 		}
 		return s.connectCodexWithID(ctx, account.ID, account.Alias, account.AuthMethod, credential)
+	case "coze-cn":
+		var credential coze.Credential
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			return domain.AccountSummary{}, credentialError(err)
+		}
+		return s.connectCozeWithID(ctx, account.ID, account.Alias, credential)
+	case "cursor":
+		var credential cursor.Credential
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			return domain.AccountSummary{}, credentialError(err)
+		}
+		return s.connectCursorWithID(ctx, account.ID, account.Alias, account.AuthMethod, credential)
 	case "deepseek":
 		var credential deepseek.Credential
 		if err := json.Unmarshal(plain, &credential); err != nil {
@@ -239,18 +484,36 @@ func (s *Accounts) RefreshOne(ctx context.Context, id string) (domain.AccountSum
 			return domain.AccountSummary{}, credentialError(err)
 		}
 		return s.connectGeminiWithID(ctx, account.ID, account.Alias, credential)
+	case "kiro":
+		var credential kiro.Credential
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			return domain.AccountSummary{}, credentialError(err)
+		}
+		return s.connectKiroWithID(ctx, account.ID, account.Alias, account.AuthMethod, credential)
 	case "mimo":
 		var credential mimo.Credential
 		if err := json.Unmarshal(plain, &credential); err != nil {
 			return domain.AccountSummary{}, credentialError(err)
 		}
 		return s.connectMimoWithID(ctx, account.ID, account.Alias, credential)
+	case "qoder-cn", "qoder-global":
+		var credential qoder.Credential
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			return domain.AccountSummary{}, credentialError(err)
+		}
+		return s.connectQoderWithID(ctx, account.ID, account.ProviderID, account.Alias, account.AuthMethod, credential)
 	case "tokenrhythm":
 		var credential tokenrhythm.Credential
 		if err := json.Unmarshal(plain, &credential); err != nil {
 			return domain.AccountSummary{}, credentialError(err)
 		}
 		return s.connectTokenRhythmWithID(ctx, account.ID, account.Alias, credential)
+	case "trae-cn":
+		var credential trae.Credential
+		if err := json.Unmarshal(plain, &credential); err != nil {
+			return domain.AccountSummary{}, credentialError(err)
+		}
+		return s.connectTraeWithID(ctx, account.ID, account.Alias, account.AuthMethod, credential)
 	case "workbuddy-cn", "workbuddy-global":
 		var credential workbuddy.Credential
 		if err := json.Unmarshal(plain, &credential); err != nil {
@@ -263,15 +526,158 @@ func (s *Accounts) RefreshOne(ctx context.Context, id string) (domain.AccountSum
 			return domain.AccountSummary{}, credentialError(err)
 		}
 		return s.connectZhipuWithID(ctx, account.ID, account.Alias, credential)
-	case "trae-cn", "qoder-cn", "coze-cn", "bailian", "qoder-global", "kiro", "cursor":
-		var credential genericquota.Credential
-		if err := json.Unmarshal(plain, &credential); err != nil {
-			return domain.AccountSummary{}, credentialError(err)
-		}
-		return s.connectGenericWithID(ctx, account.ID, account.ProviderID, account.Alias, credential)
 	default:
 		return domain.AccountSummary{}, fmt.Errorf("平台 %s 尚未实现真实刷新", account.ProviderID)
 	}
+}
+
+func (s *Accounts) connectAliyunWithID(ctx context.Context, id, alias string, credential aliyunbss.Credential) (domain.AccountSummary, error) {
+	balance, err := s.aliyun.FetchBalance(ctx, credential)
+	if err != nil {
+		return domain.AccountSummary{}, fmt.Errorf("无法读取真实阿里云账户余额: %w", err)
+	}
+	if strings.TrimSpace(alias) == "" {
+		alias = "阿里云费用账户"
+	}
+	windows := []domain.QuotaSignal{{ID: "aliyun-live-balance", Provider: "阿里云百炼 / 费用中心", Label: "账户可用额度", Kind: "balance", Value: balance.Available, Unit: balance.Currency, Status: "healthy", Source: "阿里云 BSS QueryAccountBalance", Confidence: "live"}}
+	if balance.Cash != nil {
+		windows = append(windows, domain.QuotaSignal{ID: "aliyun-live-cash", Provider: "阿里云百炼 / 费用中心", Label: "现金余额", Kind: "balance", Value: *balance.Cash, Unit: balance.Currency, Status: "healthy", Source: "阿里云 BSS QueryAccountBalance", Confidence: "live"})
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := newConnected(id, "bailian", alias, "", "阿里云账户余额", "access_key", "阿里云官方 BSS OpenAPI", windows, now)
+	return s.persist(ctx, account, credential, "阿里云")
+}
+
+func (s *Accounts) connectQoderWithID(ctx context.Context, id, providerID, alias, authMethod string, credential qoder.Credential) (domain.AccountSummary, error) {
+	quota, _, err := s.qoder.FetchQuota(ctx, &credential)
+	if err != nil {
+		return domain.AccountSummary{}, fmt.Errorf("无法读取真实 Qoder 额度: %w", err)
+	}
+	name, _, _ := providerMeta(providerID)
+	if strings.TrimSpace(alias) == "" {
+		alias = firstNonEmpty(credential.Nickname, name+" 账号")
+	}
+	windows := make([]domain.QuotaSignal, 0, len(quota.Windows))
+	for index, window := range quota.Windows {
+		unit := strings.TrimSpace(window.Unit)
+		if unit == "" {
+			unit = "credits"
+		}
+		signal := domain.QuotaSignal{ID: fmt.Sprintf("qoder-live-%d", index), Provider: name, Label: window.Label, Kind: "credits", Value: window.Remaining, Unit: unit, ExpiresAt: window.ExpiresAt, Status: "healthy", Source: "Qoder /api/v2/quota/usage", Confidence: "live"}
+		if window.Total > 0 {
+			total := window.Total
+			percent := window.Remaining / total * 100
+			signal.Total = &total
+			signal.RemainingPercent = &percent
+			signal.Status = quotaStatus(percent)
+		}
+		windows = append(windows, signal)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := newConnected(id, providerID, alias, "", firstNonEmpty(quota.Plan, "Credits"), authMethod, "Qoder 官方 OpenAPI", windows, now)
+	return s.persist(ctx, account, credential, name)
+}
+
+func (s *Accounts) connectCursorWithID(ctx context.Context, id, alias, authMethod string, credential cursor.Credential) (domain.AccountSummary, error) {
+	usage, _, err := s.cursor.FetchUsage(ctx, &credential)
+	if err != nil {
+		return domain.AccountSummary{}, fmt.Errorf("无法读取真实 Cursor 额度: %w", err)
+	}
+	if strings.TrimSpace(alias) == "" {
+		alias = firstNonEmpty(credential.Email, "Cursor 账号")
+	}
+	remaining, total := usage.Remaining, 100.0
+	windows := []domain.QuotaSignal{{ID: "cursor-live-plan", Provider: "Cursor", Label: "订阅周期额度", Kind: "rate_window", Value: remaining, Total: &total, Unit: "%", RemainingPercent: &remaining, ResetAt: usage.CycleEnd, Status: quotaStatus(remaining), Source: "Cursor /api/usage-summary", Confidence: "live"}}
+	if usage.OnDemand != nil {
+		signal := domain.QuotaSignal{ID: "cursor-live-ondemand", Provider: "Cursor", Label: "按量额度", Kind: "balance", Value: *usage.OnDemand, Unit: "USD", ResetAt: usage.CycleEnd, Status: "healthy", Source: "Cursor /api/usage-summary", Confidence: "live"}
+		if usage.OnDemandMax != nil && *usage.OnDemandMax > 0 {
+			signal.Total = usage.OnDemandMax
+			percent := *usage.OnDemand / *usage.OnDemandMax * 100
+			signal.RemainingPercent = &percent
+			signal.Status = quotaStatus(percent)
+		}
+		windows = append(windows, signal)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := newConnected(id, "cursor", alias, credential.Email, firstNonEmpty(usage.Plan, "Subscription"), authMethod, "Cursor 官方用量接口", windows, now)
+	return s.persist(ctx, account, credential, "Cursor")
+}
+
+func (s *Accounts) connectCozeWithID(ctx context.Context, id, alias string, credential coze.Credential) (domain.AccountSummary, error) {
+	balance, err := s.coze.FetchBalance(ctx, credential)
+	if err != nil {
+		return domain.AccountSummary{}, fmt.Errorf("无法读取真实扣子积分: %w", err)
+	}
+	if strings.TrimSpace(alias) == "" {
+		alias = firstNonEmpty(balance.Nickname, "扣子账号")
+	}
+	signal := domain.QuotaSignal{ID: "coze-live-credits", Provider: "扣子 Coze", Label: "积分余额", Kind: "credits", Value: balance.Remaining, Unit: "credits", ExpiresAt: balance.ExpiresAt, Status: "healthy", Source: "Coze /credit/balance", Confidence: "live"}
+	if balance.Total != nil && *balance.Total > 0 {
+		signal.Total = balance.Total
+		percent := balance.Remaining / *balance.Total * 100
+		signal.RemainingPercent = &percent
+		signal.Status = quotaStatus(percent)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := newConnected(id, "coze-cn", alias, "", "Credits", "cookie", "扣子官方站点积分接口", []domain.QuotaSignal{signal}, now)
+	return s.persist(ctx, account, credential, "扣子 Coze")
+}
+
+func (s *Accounts) connectKiroWithID(ctx context.Context, id, alias, authMethod string, credential kiro.Credential) (domain.AccountSummary, error) {
+	usage, _, err := s.kiro.FetchUsage(ctx, &credential)
+	if err != nil {
+		return domain.AccountSummary{}, fmt.Errorf("无法读取真实 Kiro 额度: %w", err)
+	}
+	if strings.TrimSpace(alias) == "" {
+		alias = firstNonEmpty(credential.Email, "Kiro 账号")
+	}
+	windows := make([]domain.QuotaSignal, 0, 2)
+	if usage.Total > 0 {
+		remaining := usage.Total - usage.Used
+		if remaining < 0 {
+			remaining = 0
+		}
+		percent := remaining / usage.Total * 100
+		total := usage.Total
+		windows = append(windows, domain.QuotaSignal{ID: "kiro-live-plan", Provider: "Kiro", Label: "Agentic Requests", Kind: "credits", Value: remaining, Total: &total, Unit: "credits", RemainingPercent: &percent, ResetAt: usage.ResetAt, Status: quotaStatus(percent), Source: "Kiro getUsageLimits", Confidence: "live"})
+	}
+	if usage.BonusTotal > 0 {
+		remaining := usage.BonusTotal - usage.BonusUsed
+		if remaining < 0 {
+			remaining = 0
+		}
+		percent := remaining / usage.BonusTotal * 100
+		total := usage.BonusTotal
+		windows = append(windows, domain.QuotaSignal{ID: "kiro-live-bonus", Provider: "Kiro", Label: "Bonus Credits", Kind: "credits", Value: remaining, Total: &total, Unit: "credits", RemainingPercent: &percent, Status: quotaStatus(percent), Source: "Kiro getUsageLimits", Confidence: "live"})
+	}
+	if len(windows) == 0 {
+		return domain.AccountSummary{}, fmt.Errorf("Kiro 官方接口未返回可显示额度")
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := newConnected(id, "kiro", alias, credential.Email, firstNonEmpty(usage.Plan, usage.Tier, "Subscription"), authMethod, "Kiro 官方 Runtime API", windows, now)
+	return s.persist(ctx, account, credential, "Kiro")
+}
+
+func (s *Accounts) connectTraeWithID(ctx context.Context, id, alias, authMethod string, credential trae.Credential) (domain.AccountSummary, error) {
+	usage, _, err := s.trae.FetchUsage(ctx, &credential)
+	if err != nil {
+		return domain.AccountSummary{}, fmt.Errorf("无法读取真实 TRAE 额度: %w", err)
+	}
+	if strings.TrimSpace(alias) == "" {
+		alias = firstNonEmpty(credential.Nickname, "TRAE CN 账号")
+	}
+	windows := make([]domain.QuotaSignal, 0, len(usage.Credits))
+	for index, item := range usage.Credits {
+		total := item.Total
+		percent := 100.0
+		if total > 0 {
+			percent = item.Remaining / total * 100
+		}
+		windows = append(windows, domain.QuotaSignal{ID: fmt.Sprintf("trae-live-%d", index), Provider: "TRAE CN / TraeCode / TraeWork", Label: item.Label, Kind: "credits", Value: item.Remaining, Total: &total, Unit: "credits", RemainingPercent: &percent, ExpiresAt: item.ExpiresAt, Status: quotaStatus(percent), Source: "TRAE ide_user_ent_usage", Confidence: "live"})
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := newConnected(id, "trae-cn", alias, "", "Credits", authMethod, "TRAE 官方权益接口", windows, now)
+	return s.persist(ctx, account, credential, "TRAE")
 }
 
 func (s *Accounts) connectClaudeWithID(ctx context.Context, id, alias string, credential claude.Credential) (domain.AccountSummary, error) {
@@ -549,7 +955,7 @@ func providerMeta(id string) (string, string, bool) {
 	providers := map[string][2]string{
 		"trae-cn": {"TRAE CN / TraeCode / TraeWork", "CN"}, "qoder-cn": {"Qoder CN", "CN"},
 		"workbuddy-cn": {"WorkBuddy / CodeBuddy 国内版", "CN"}, "coze-cn": {"扣子 Coze", "CN"},
-		"bailian": {"阿里云百炼 Token Plan", "CN"}, "mimo": {"小米 MiMo", "CN"}, "tokenrhythm": {"基元律动 TokenRhythm", "CN"},
+		"bailian": {"阿里云百炼 / 阿里云余额", "CN"}, "mimo": {"小米 MiMo", "CN"}, "tokenrhythm": {"基元律动 TokenRhythm", "CN"},
 		"deepseek": {"DeepSeek", "CN"}, "zhipu": {"智谱 AI", "CN"}, "codex": {"Codex", "Global"},
 		"gemini-cli": {"Gemini", "Global"}, "claude-code": {"Claude Code", "Global"},
 		"qoder-global": {"Qoder 国际版", "Global"}, "workbuddy-global": {"WorkBuddy / CodeBuddy 国际版", "Global"},

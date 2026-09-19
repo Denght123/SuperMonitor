@@ -7,30 +7,42 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/windows/registry"
 )
 
-func proxyFunc() func(*http.Request) (*url.URL, error) {
+func platformProxy(request *http.Request) (*url.URL, error) {
+	// Read on every request so Clash/V2Ray/other desktop proxy switches take
+	// effect without restarting SuperMonitor.
 	system := windowsInternetProxy()
-	return func(request *http.Request) (*url.URL, error) {
-		configured, err := http.ProxyFromEnvironment(request)
-		if err != nil || configured != nil {
-			return configured, err
-		}
-		if system == nil || request == nil || request.URL == nil || shouldBypassProxy(request.URL.Hostname(), system.bypass) {
+	if system == nil || request == nil || request.URL == nil || shouldBypassProxy(request.URL.Hostname(), system.bypass) {
+		return nil, nil
+	}
+	selected := system.http
+	if request.URL.Scheme == "https" && system.https != nil {
+		selected = system.https
+	}
+	if selected == nil {
+		return nil, nil
+	}
+	// Proxy apps frequently keep their local listener and registry address but
+	// disable ProxyEnable while using TUN mode. For global AI providers only,
+	// reuse that reachable loopback listener so OpenAI/Cursor/Kiro requests do
+	// not silently fall back to a blocked direct route. Domestic providers stay
+	// direct unless Windows proxy is explicitly enabled.
+	if !system.enabled {
+		if !isGlobalAIHost(request.URL.Hostname()) || !isReachableLoopbackProxy(selected) {
 			return nil, nil
 		}
-		if request.URL.Scheme == "https" && system.https != nil {
-			return system.https, nil
-		}
-		return system.http, nil
 	}
+	return selected, nil
 }
 
 type internetProxy struct {
 	http, https *url.URL
 	bypass      []string
+	enabled     bool
 }
 
 func windowsInternetProxy() *internetProxy {
@@ -39,15 +51,12 @@ func windowsInternetProxy() *internetProxy {
 		return nil
 	}
 	defer key.Close()
-	enabled, _, err := key.GetIntegerValue("ProxyEnable")
-	if err != nil || enabled == 0 {
-		return nil
-	}
+	enabled, _, _ := key.GetIntegerValue("ProxyEnable")
 	server, _, err := key.GetStringValue("ProxyServer")
 	if err != nil || strings.TrimSpace(server) == "" {
 		return nil
 	}
-	proxy := &internetProxy{}
+	proxy := &internetProxy{enabled: enabled != 0}
 	entries := strings.Split(server, ";")
 	if len(entries) == 1 && !strings.Contains(entries[0], "=") {
 		proxy.http = parseProxyURL(entries[0])
@@ -83,6 +92,37 @@ func windowsInternetProxy() *internetProxy {
 		}
 	}
 	return proxy
+}
+
+func isReachableLoopbackProxy(proxyURL *url.URL) bool {
+	if proxyURL == nil {
+		return false
+	}
+	host := proxyURL.Hostname()
+	ip := net.ParseIP(host)
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+		return false
+	}
+	connection, err := net.DialTimeout("tcp", proxyURL.Host, 150*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = connection.Close()
+	return true
+}
+
+func isGlobalAIHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	for _, suffix := range []string{
+		"openai.com", "chatgpt.com", "anthropic.com", "claude.ai",
+		"googleapis.com", "google.com", "cursor.com", "cursor.sh",
+		"kiro.dev", "amazonaws.com", "qoder.sh", "trae.ai",
+	} {
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseProxyURL(value string) *url.URL {

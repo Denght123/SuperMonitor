@@ -23,7 +23,7 @@ const (
 	deviceVerificationURL = "https://auth.openai.com/codex/device"
 	deviceRedirectURI     = "https://auth.openai.com/deviceauth/callback"
 	usageURL              = "https://chatgpt.com/backend-api/wham/usage"
-	userAgent             = "codex-cli/0.154.0 SuperMonitor/0.5.0"
+	userAgent             = "codex-cli/0.154.0 SuperMonitor/0.6.0"
 )
 
 type Client struct {
@@ -69,7 +69,7 @@ type deviceTokenResponse struct {
 }
 
 func NewClient() *Client {
-	return &Client{http: netutil.NewHTTPClient(20 * time.Second)}
+	return &Client{http: netutil.NewHTTPClient(30 * time.Second)}
 }
 
 func ParseCredential(raw []byte) (Credential, error) {
