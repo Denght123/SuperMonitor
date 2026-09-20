@@ -83,7 +83,7 @@ func (c *Client) FetchUsage(ctx context.Context, credential Credential) (Usage, 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "claude-code/2.1 SuperMonitor/0.8.0")
+	req.Header.Set("User-Agent", "claude-code/2.1 SuperMonitor/0.8.1")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return Usage{}, fmt.Errorf("连接 Claude Code 用量接口失败: %w", err)

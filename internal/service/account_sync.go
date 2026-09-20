@@ -13,7 +13,7 @@ import (
 
 const (
 	DefaultAccountSyncInterval = 15 * time.Minute
-	defaultAccountSyncTimeout  = 3 * time.Minute
+	defaultAccountSyncTimeout  = 10 * time.Minute
 	minimumStartupDelay        = 5 * time.Second
 	maximumStartupDelay        = 60 * time.Second
 )
@@ -49,6 +49,10 @@ type AccountSync struct {
 
 func NewAccountSync(accounts *Accounts, events *EventHub, logger *slog.Logger) *AccountSync {
 	return newAccountSync(accounts, events, logger, DefaultAccountSyncInterval, defaultAccountSyncTimeout, randomStartupDelay)
+}
+
+func NewAccountSyncWithTimeout(accounts *Accounts, events *EventHub, logger *slog.Logger, timeout time.Duration) *AccountSync {
+	return newAccountSync(accounts, events, logger, DefaultAccountSyncInterval, timeout, randomStartupDelay)
 }
 
 func newAccountSync(accounts allAccountRefresher, events *EventHub, logger *slog.Logger, interval, timeout time.Duration, initialDelay func() time.Duration) *AccountSync {

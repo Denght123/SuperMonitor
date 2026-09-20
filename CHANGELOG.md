@@ -2,6 +2,32 @@
 
 All notable changes to SuperMonitor are documented here.
 
+## [0.8.1] - 2026-09-21
+
+### Added
+
+- Optional administrator-token protection with an HttpOnly browser session and Bearer-token support for API automation.
+- Safe non-loopback startup defaults: remote listeners require an administrator token of at least 24 Unicode characters unless an explicitly isolated deployment opts out.
+- Persistent scrubbed structured logs at `SUPMON_DATA_DIR/supermonitor.log`, 10 MiB rotation with one retained backup, protected data-file collision checks, and an explicit stdout-only mode for supervised deployments.
+- SSE heartbeat frames and integration coverage proving updates still arrive after the HTTP server write timeout.
+
+### Changed
+
+- Account refresh now uses at most four workers, an independent 45-second timeout per account, a configurable 10-minute whole-wave timeout, stable bounded error summaries, and parent cancellation.
+- TokenRhythm reloads and idempotently stores its rolling 30-day official history on every refresh, repairing gaps created while the service was offline.
+- Provider `lastCheckedAt` now advances after a successful real account refresh.
+- Provider badges cover every current adapter, OAuth polling no longer recreates its interval for each pending response, and settings copy now describes the implemented notification controls.
+- `.env.example` now documents the real proxy, log, and administrator-token settings and no longer advertises an unused master-key variable.
+- Direct Docker runs now document their required remote-listener protection, while the loopback-only Compose mapping retains an explicit isolated-boundary opt-in; reverse-proxy guidance preserves the public Host and forwarded scheme/host needed by OAuth and same-origin checks.
+
+### Fixed
+
+- Long-lived SSE clients no longer lose account and refresh events after 30 seconds.
+- A zero or negative Zhipu CNY balance is now critical instead of healthy.
+- Unknown API routes and unsupported methods now return the same structured JSON error shape as known endpoints.
+- Removed the unused always-zero KPI delta field instead of implying an unavailable period comparison.
+- Administrator-session states now provide complete recovery feedback, and app panels narrower than 320 px no longer create root-level horizontal scrolling.
+
 ## [0.8.0] - 2026-09-20
 
 ### Added

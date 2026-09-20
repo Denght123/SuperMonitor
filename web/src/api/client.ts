@@ -57,9 +57,12 @@ export class APIError extends Error {
   }
 }
 
+export const authenticationRequiredEvent = 'supermonitor:authentication-required'
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
     ...init,
+    credentials: 'same-origin',
     headers: {
       Accept: 'application/json',
       ...init?.headers,
@@ -67,6 +70,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
 
   if (!response.ok) {
+    if (response.status === 401 && path !== '/auth/session' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event(authenticationRequiredEvent))
+    }
     const payload = (await response.json().catch(() => ({}))) as APIErrorShape
     throw new APIError(
       payload.error?.message ?? `Request failed with status ${response.status}`,
@@ -81,6 +87,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  authStatus: () => request<{ required: boolean; authenticated: boolean }>('/auth/status'),
+  login: (token: string) => request<{ authenticated: boolean }>('/auth/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  }),
+  logout: () => request<{ authenticated: boolean }>('/auth/session', { method: 'DELETE' }),
   overview: () => request<Overview>('/overview'),
   providers: () => request<{ items: Provider[] }>('/providers'),
   refresh: () => request<{ status: string; message: string }>('/refresh', { method: 'POST' }),

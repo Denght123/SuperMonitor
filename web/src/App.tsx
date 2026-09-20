@@ -2,7 +2,7 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import {
   Activity, AlertTriangle, ArrowDown, ArrowUp, Bell, Bot, Boxes, Check, ChevronRight, CircleGauge, Clock3,
   Database, ExternalLink, FileJson, Globe2, KeyRound, LayoutDashboard, LoaderCircle, Moon,
-  Mail, Plus, RefreshCw, ScanSearch, Search, Send, Settings, ShieldCheck, Sun, Trash2, Upload, X, Zap,
+  LogOut, Mail, Plus, RefreshCw, ScanSearch, Search, Send, Settings, ShieldCheck, Sun, Trash2, Upload, X, Zap,
 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import {
@@ -14,8 +14,11 @@ import { useOverview } from './hooks/useOverview'
 import { compactNumber, formatMetric, quotaValue, relativeTime } from './lib/format'
 import { filterUsageByRange, usageRangeDescription, usageRangeOptions, type UsageRange } from './lib/usageRange'
 import { ProviderLogo } from './components/ProviderLogo'
+import { useDeviceLoginPolling } from './hooks/useDeviceLoginPolling'
 import { useToast } from './hooks/useToast'
+import { providerShortName } from './lib/providerNames'
 import { moveProviderInOrder, normalizeProviderOrder, readProviderOrder, sortProviderEntries, writeProviderOrder, type ProviderOrderDirection } from './lib/providerOrder'
+import { useAuthentication } from './hooks/useAuthentication'
 
 type Page = 'overview' | 'accounts' | 'usage' | 'activities' | 'alerts' | 'settings'
 type Theme = 'light' | 'dark' | 'system'
@@ -35,7 +38,7 @@ const pageTitles: Record<Page, { title: string; description: string }> = {
   usage: { title: '用量统计', description: '按日期和模型观察 Token 消耗，不混合余额与积分。' },
   activities: { title: '活动中心', description: '集中执行已验证的签到与积分活动。' },
   alerts: { title: '告警中心', description: '额度、认证与刷新异常集中处理。' },
-  settings: { title: '系统设置', description: '管理主题、轮询、安全与数据保留。' },
+  settings: { title: '系统设置', description: '连接通知渠道，查看额度、重置与活动提醒策略。' },
 }
 
 function initialTheme(): Theme {
@@ -45,6 +48,7 @@ function initialTheme(): Theme {
 
 export function App() {
   const { notify } = useToast()
+  const authentication = useAuthentication()
   const [page, setPage] = useState<Page>('overview')
   const [theme, setTheme] = useState<Theme>(initialTheme)
   const [selectedAccount, setSelectedAccount] = useState<AccountSummary | null>(null)
@@ -85,6 +89,14 @@ export function App() {
       notify({ tone: 'error', title: '刷新全部失败', message: reason instanceof Error ? reason.message : '请检查网络与平台认证后重试。' })
     }
   }
+  const logout = async () => {
+    try {
+      await authentication.logout()
+      notify({ tone: 'info', title: '已退出管理会话', message: '再次进入控制台时需要重新验证管理员令牌。' })
+    } catch (reason) {
+      notify({ tone: 'error', title: '退出失败', message: reason instanceof Error ? reason.message : '请稍后重试。' })
+    }
+  }
   const moveProvider = useCallback((providerId: string, direction: ProviderOrderDirection, providerName: string) => {
     setProviderOrder((current) => {
       const next = moveProviderInOrder(current, visibleProviderIds, providerId, direction)
@@ -97,25 +109,26 @@ export function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar" aria-label="主导航">
-        <button className="brand" onClick={() => changePage('overview')}>
+        <button className="brand" onClick={() => changePage('overview')} aria-label="返回监控总览">
           <span className="brand-mark"><CircleGauge size={23} /></span>
           <span><strong>SuperMonitor</strong><small>AI quota console</small></span>
         </button>
         <nav>
           {navItems.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => changePage(id)} aria-current={page === id ? 'page' : undefined}>
+            <button key={id} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => changePage(id)} aria-current={page === id ? 'page' : undefined} aria-label={label}>
               <Icon size={20} /><span>{label}</span>
               {id === 'alerts' && data?.alerts.length ? <b>{data.alerts.length}</b> : null}
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.8.0</small></div>
+        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.8.1</small></div>
       </aside>
 
       <main className="main-stage">
         <header className="topbar">
-          <div className="connection-state"><i className={`connection-dot ${streamStatus}`} /><span>本地部署 · {streamStatus === 'live' ? '实时连接' : '正在连接'}</span></div>
+          <div className="connection-state" role="status" aria-label={`本地部署，${streamStatus === 'live' ? '实时连接' : streamStatus === 'offline' ? '连接已中断' : '正在连接'}`}><i className={`connection-dot ${streamStatus}`} aria-hidden="true" /><span>本地部署 · {streamStatus === 'live' ? '实时连接' : streamStatus === 'offline' ? '连接已中断' : '正在连接'}</span></div>
           <div className="topbar-actions">
+            {authentication.required ? <button className="icon-button" onClick={() => void logout()} title="退出管理会话" aria-label="退出管理会话"><LogOut size={19} /><span>退出</span></button> : null}
             <button className="icon-button" onClick={cycleTheme} title={`当前主题：${theme}`} aria-label="切换主题">
               {theme === 'light' ? <Sun size={20} /> : theme === 'dark' ? <Moon size={20} /> : <Settings size={20} />}
               <span>{theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'}</span>
@@ -164,7 +177,7 @@ function OverviewPage({ data, providerOrder, onMoveProvider, onSelectAccount }: 
 }
 
 function KPIBand({ data }: { data: Overview }) {
-  return <section className="kpi-band">{data.kpis.map((kpi) => <div className={`kpi-item tone-${kpi.tone}`} key={kpi.id}><span>{kpi.label}</span><strong>{formatMetric(kpi.value, kpi.unit)}</strong><small>{kpi.delta > 0 ? `较前期 +${kpi.delta}%` : kpi.unit}</small></div>)}<div className="kpi-context"><Database size={20} /><div><strong>计量口径隔离</strong><span>Token、余额、积分和订阅限额分别统计</span></div></div></section>
+  return <section className="kpi-band">{data.kpis.map((kpi) => <div className={`kpi-item tone-${kpi.tone}`} key={kpi.id}><span>{kpi.label}</span><strong>{formatMetric(kpi.value, kpi.unit)}</strong><small>{kpi.unit}</small></div>)}<div className="kpi-context"><Database size={20} /><div><strong>计量口径隔离</strong><span>Token、余额、积分和订阅限额分别统计</span></div></div></section>
 }
 
 function TokenChart({ data }: { data: Overview }) {
@@ -219,7 +232,7 @@ function AccountQuotaCard({ account, onSelect }: { account: AccountSummary; onSe
   const signals = isWorkBuddy ? account.quotaWindows.slice(0, 1) : account.quotaWindows
   const hiddenPackages = Math.max(0, account.quotaWindows.length - signals.length)
   return <button className={`quota-account-card status-${account.status}`} onClick={onSelect}>
-    <div className="quota-account-identity"><span className="provider-chip">{providerShortName(account.providerId)}</span><strong>{account.email || account.alias}</strong><ChevronRight size={17} /></div>
+    <div className="quota-account-identity"><span className="provider-chip">{providerShortName(account.providerId, account.provider)}</span><strong>{account.email || account.alias}</strong><ChevronRight size={17} /></div>
     <div className="quota-account-plan"><span>套餐</span><b>{planLabel(account.plan)}</b></div>
     <div className="quota-account-signals">{signals.length ? signals.map((signal) => <AccountQuotaLine key={signal.id} signal={signal} />) : <div className="metric-summary"><strong>{account.primaryMetric}</strong><span>{account.secondaryMetric}</span></div>}</div>
     {hiddenPackages ? <span className="package-summary">总积分已包含 {hiddenPackages} 个官方积分包，点击查看明细</span> : null}
@@ -258,14 +271,31 @@ function ProviderOrderControls({ providerId, providerName, index, total, onMove 
 
 function AccountsPage({ accounts, providerOrder, onMoveProvider, onSelectAccount, onReload }: { accounts: AccountSummary[]; providerOrder: string[]; onMoveProvider: (providerId: string, direction: ProviderOrderDirection, providerName: string) => void; onSelectAccount: (account: AccountSummary) => void; onReload: () => void }) {
   const [providers, setProviders] = useState<Provider[]>([])
+  const [providersLoading, setProvidersLoading] = useState(true)
+  const [providersError, setProvidersError] = useState('')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Provider | null>(null)
-  useEffect(() => { void api.providers().then((value) => setProviders(value.items)) }, [])
+  const loadProviders = useCallback(async () => {
+    setProvidersLoading(true)
+    setProvidersError('')
+    try {
+      const value = await api.providers()
+      setProviders(value.items)
+    } catch (reason) {
+      setProvidersError(reason instanceof Error ? reason.message : '平台列表读取失败')
+    } finally {
+      setProvidersLoading(false)
+    }
+  }, [])
+  useEffect(() => { void loadProviders() }, [loadProviders])
   const filtered = useMemo(() => providers.filter((provider) => `${provider.name}${provider.category}${provider.description}`.toLowerCase().includes(query.toLowerCase())), [providers, query])
   const groups = ['国内平台', '国际平台']
+  const visibleGroups = groups.map((group) => ({ group, providers: filtered.filter((provider) => provider.category === group) })).filter((entry) => entry.providers.length)
   return <>
     <section className="section-block"><div className="section-header"><div><h2>已连接账号</h2><p>按应用归类 · {accounts.length} 个真实账号 · 顺序会自动保存</p></div></div><ProviderAccountSections accounts={accounts} providerOrder={providerOrder} onMoveProvider={onMoveProvider} onSelectAccount={onSelectAccount} /></section>
-    <section className="section-block provider-section"><div className="section-header"><div><h2>添加平台账号</h2><p>每个平台独立添加；只有专属认证与真实额度字段完成验证后才开放连接。</p></div><label className="provider-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索平台" /></label></div>{groups.map((group) => <div key={group} className="provider-group"><h3>{group}</h3><div className="provider-grid">{filtered.filter((provider) => provider.category === group).map((provider) => <article className={`provider-card ${provider.liveAuth ? '' : 'is-researching'}`} key={provider.id}><div className="provider-card-top"><ProviderLogo providerId={provider.id} name={provider.name} /><span className={`adapter-state ${provider.liveAuth ? 'live' : 'pending'}`}>{provider.liveAuth ? '可连接' : '接入验证中'}</span></div><h4>{provider.name}</h4><p>{provider.description}</p><div className="capability-row">{provider.capabilities.slice(0, 3).map((capability) => <span key={capability}>{capabilityLabel(capability)}</span>)}</div><button className={provider.liveAuth ? 'provider-action active' : 'provider-action'} onClick={() => provider.liveAuth && setSelected(provider)} disabled={!provider.liveAuth}>{provider.liveAuth ? <><Plus size={17} />添加账号</> : '专属接入尚未开放'}</button></article>)}</div></div>)}</section>
+    <section className="section-block provider-section"><div className="section-header"><div><h2>添加平台账号</h2><p>每个平台独立添加；只有专属认证与真实额度字段完成验证后才开放连接。</p></div><label className="provider-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索平台" aria-label="搜索可添加平台" /></label></div>
+      {providersLoading ? <div className="provider-load-state" role="status"><LoaderCircle className="spin" size={21} /><span><strong>正在读取平台列表</strong><small>加载可用认证方式与额度能力</small></span></div> : providersError ? <div className="provider-load-state error" role="alert"><AlertTriangle size={21} /><span><strong>平台列表暂时无法读取</strong><small>{providersError}</small></span><button className="secondary-button" type="button" onClick={() => void loadProviders()}><RefreshCw size={16} />重新加载</button></div> : visibleGroups.length ? visibleGroups.map(({ group, providers: groupProviders }) => <div key={group} className="provider-group"><h3>{group}</h3><div className="provider-grid">{groupProviders.map((provider) => <article className={`provider-card ${provider.liveAuth ? '' : 'is-researching'}`} key={provider.id}><div className="provider-card-top"><ProviderLogo providerId={provider.id} name={provider.name} /><span className={`adapter-state ${provider.liveAuth ? 'live' : 'pending'}`}>{provider.liveAuth ? '可连接' : '接入验证中'}</span></div><h4>{provider.name}</h4><p>{provider.description}</p><div className="capability-row">{provider.capabilities.slice(0, 3).map((capability) => <span key={capability}>{capabilityLabel(capability)}</span>)}</div><button className={provider.liveAuth ? 'provider-action active' : 'provider-action'} onClick={() => provider.liveAuth && setSelected(provider)} disabled={!provider.liveAuth}>{provider.liveAuth ? <><Plus size={17} />添加账号</> : '专属接入尚未开放'}</button></article>)}</div></div>) : <EmptyState title="没有匹配的平台" detail="请尝试平台全称、英文名或所属地区。" />}
+    </section>
     {selected ? <ProviderConnectDialog provider={selected} onClose={() => setSelected(null)} onConnected={() => { setSelected(null); onReload() }} /> : null}
   </>
 }
@@ -294,32 +324,7 @@ function ProviderConnectDialog({ provider, onClose, onConnected }: { provider: P
     return () => window.removeEventListener('keydown', listener)
   }, [onClose])
 
-  useEffect(() => {
-    if (!session || session.status !== 'pending') return
-    const timer = window.setInterval(() => {
-      const statusRequest = session.provider === 'codex' ? api.codexDeviceLoginStatus(session.id) : api.providerOAuthStatus(session.provider, session.id)
-      void statusRequest.then((next) => {
-        setSession(next)
-        if (next.status === 'completed') {
-          window.clearInterval(timer)
-          notify({ tone: 'success', title: `${provider.name} 授权成功`, message: '账号已加入账号池，真实额度正在同步。' })
-          window.setTimeout(onConnected, 900)
-        }
-        if (next.status === 'failed') {
-          window.clearInterval(timer)
-          setBusy(false)
-          setError(next.message)
-          notify({ tone: 'error', title: `${provider.name} 授权失败`, message: next.message })
-        }
-      }).catch((reason: Error) => {
-        window.clearInterval(timer)
-        setBusy(false)
-        setError(reason.message)
-        notify({ tone: 'error', title: `${provider.name} 登录状态读取失败`, message: reason.message })
-      })
-    }, 2500)
-    return () => window.clearInterval(timer)
-  }, [notify, onConnected, provider.name, session])
+  useDeviceLoginPolling({ session, providerName: provider.name, setSession, setBusy, setError, notify, onConnected })
 
   const importFile = async () => {
     if (!file) { setError('请先选择认证文件'); return }
@@ -453,7 +458,7 @@ function ActivitiesPage({ onReload }: { onReload: () => void }) {
     {loading ? <div className="activity-loading"><LoaderCircle className="spin" size={20} />正在读取平台活动状态</div> : items.length ? <div className="activity-grid">{items.map((item) => { const busy = running.includes(item.accountId); const completed = item.status === 'completed'; const unavailable = item.status === 'error'; return <article className={`activity-card ${completed ? 'completed' : unavailable ? 'error' : ''}`} key={`${item.accountId}-${item.id}`}><div className="activity-icon">{completed ? <Check size={20} /> : unavailable ? <AlertTriangle size={20} /> : <Zap size={20} />}</div><div className="activity-copy"><span>{item.provider}</span><strong>{item.accountAlias} · {item.title}</strong><small>{item.description}</small></div><button className={completed ? 'secondary-button completed' : unavailable ? 'secondary-button' : 'primary-button'} onClick={() => void run(item)} disabled={completed || unavailable || busy}>{busy ? <LoaderCircle className="spin" size={17} /> : completed ? <Check size={17} /> : unavailable ? <AlertTriangle size={17} /> : <Zap size={17} />}{completed ? '今日已完成' : unavailable ? '状态读取失败' : '立即签到'}</button></article> })}</div> : <EmptyState title="当前账号池没有可执行活动" detail="Codex 等没有签到活动的平台不会出现在这里；接入支持活动的国内 WorkBuddy 账号后会自动显示。" />}
   </section>
 }
-function AlertsPage({ alerts }: { alerts: Alert[] }) { return <section className="section-block alert-list"><div className="section-header"><div><h2>未解决告警</h2><p>同一故障自动去重；额度恢复或提醒窗口结束后会自动移除。</p></div></div>{alerts.map((alert) => <article key={alert.id} className={`alert-item severity-${alert.severity}`}><AlertTriangle size={22} /><div><span>{alert.provider} · {relativeTime(alert.createdAt)}</span><strong>{alert.title}</strong><p>{alert.message}</p><small>建议：{alert.recovery}</small></div></article>)}</section> }
+function AlertsPage({ alerts }: { alerts: Alert[] }) { return <section className="section-block alert-list"><div className="section-header"><div><h2>未解决告警</h2><p>同一故障自动去重；额度恢复或提醒窗口结束后会自动移除。</p></div></div>{alerts.length ? alerts.map((alert) => <article key={alert.id} className={`alert-item severity-${alert.severity}`}><AlertTriangle size={22} /><div><span>{alert.provider} · {relativeTime(alert.createdAt)}</span><strong>{alert.title}</strong><p>{alert.message}</p><small>建议：{alert.recovery}</small></div></article>) : <EmptyState title="当前没有未解决告警" detail="额度、认证和刷新状态正常；新告警会自动出现在这里。" />}</section> }
 function SettingsPage() {
   const { notify } = useToast()
   const [channels, setChannels] = useState<NotificationChannel[]>([])
@@ -733,7 +738,6 @@ function EmptyState({ title, detail }: { title: string; detail: string }) { retu
 function DashboardSkeleton() { return <div className="skeleton-grid">{Array.from({ length: 8 }).map((_, index) => <i key={index} />)}</div> }
 function formatDateTime(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
 function formatCompactDate(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
-function providerShortName(providerId: string) { return ({ codex: 'Codex', 'workbuddy-cn': 'WorkBuddy CN', 'workbuddy-global': 'WorkBuddy', tokenrhythm: 'TokenRhythm', zhipu: '智谱 AI', deepseek: 'DeepSeek' } as Record<string, string>)[providerId] ?? providerId }
 function planLabel(value?: string) { if (!value) return '未标注'; return value.toLowerCase() === 'plus' ? 'Plus' : value.toLowerCase() === 'pro' ? 'Pro' : value }
 function capabilityLabel(value: string) { return ({ quota: '额度', usage: '用量', credits: '积分', balance: '余额', token_plan: 'Token Plan', checkin: '签到' } as Record<string, string>)[value] ?? value }
 function authMethodLabel(value?: string) { return ({ credential_import: '认证文件导入', device_code: '官方设备登录', oauth: '官方网页登录', oauth_qr: '官方二维码登录', api_key: 'API Key', access_key: 'RAM AccessKey', cookie: '控制台 Cookie', session_token: '网页登录态' } as Record<string, string>)[value ?? ''] ?? (value || '未记录') }

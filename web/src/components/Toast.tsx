@@ -31,7 +31,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     const duration = input.duration ?? defaultDurations[input.tone]
     const item: ToastItem = { ...input, id, duration }
 
-    setItems((current) => [...current.slice(-3), item])
+    setItems((current) => {
+      const next = [...current, item]
+      next.slice(0, -4).forEach((removed) => {
+        const timer = timers.current.get(removed.id)
+        if (timer !== undefined) window.clearTimeout(timer)
+        timers.current.delete(removed.id)
+      })
+      return next.slice(-4)
+    })
     timers.current.set(id, window.setTimeout(() => dismiss(id), duration))
     return id
   }, [dismiss])

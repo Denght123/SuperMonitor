@@ -4,6 +4,38 @@
  */
 
 export interface paths {
+    "/auth/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAuthenticationStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createAuthenticationSession"];
+        delete: operations["deleteAuthenticationSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/overview": {
         parameters: {
             query?: never;
@@ -140,6 +172,23 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getProviderOAuth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/kiro/oauth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Public one-time OAuth callback protected by the server-held state and PKCE verifier. */
+        get: operations["completeKiroOAuth"];
         put?: never;
         post?: never;
         delete?: never;
@@ -360,6 +409,10 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AuthStatus: {
+            required: boolean;
+            authenticated: boolean;
+        };
         AccountSyncStatus: {
             enabled: boolean;
             /** Format: int64 */
@@ -455,7 +508,6 @@ export interface components {
             label: string;
             value: number;
             unit: string;
-            delta: number;
             tone: string;
         };
         DailyUsage: {
@@ -566,6 +618,80 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getAuthenticationStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether administrator authentication is enabled and the current browser session is authenticated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthStatus"];
+                };
+            };
+        };
+    };
+    createAuthenticationSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Administrator token containing at least 24 Unicode characters */
+                    token: string;
+                };
+            };
+        };
+        responses: {
+            /** @description HttpOnly administrator session created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthStatus"];
+                };
+            };
+            /** @description Administrator token is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteAuthenticationSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Browser administrator session cleared */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthStatus"];
+                };
+            };
+        };
+    };
     getOverview: {
         parameters: {
             query?: never;
@@ -804,6 +930,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceLoginSession"];
+                };
+            };
+        };
+    };
+    completeKiroOAuth: {
+        parameters: {
+            query: {
+                state: string;
+                code?: string;
+                error?: string;
+                login_option?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Kiro authorization completed; the browser may close this page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Invalid, expired, denied, or failed Kiro authorization callback */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
                 };
             };
         };

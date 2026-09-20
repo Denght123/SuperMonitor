@@ -40,7 +40,6 @@ type KPI struct {
 	Label string  `json:"label"`
 	Value float64 `json:"value"`
 	Unit  string  `json:"unit"`
-	Delta float64 `json:"delta"`
 	Tone  string  `json:"tone"`
 }
 

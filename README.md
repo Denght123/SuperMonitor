@@ -2,7 +2,7 @@
 
 SuperMonitor is an open-source, self-hosted control plane for monitoring AI and coding-agent quotas, credits, balances, refresh windows, and usage history.
 
-> Current status: **v0.8 automatic synchronization, verified activity execution, and real usage history**. Connected accounts use provider-specific OAuth, credential-file, API-key, access-key, Cookie, or session-token flows; unsupported data is never replaced with demo quota.
+> Current status: **v0.8.1 resilient synchronization, authenticated remote access, and real usage history**. Connected accounts use provider-specific OAuth, credential-file, API-key, access-key, Cookie, or session-token flows; unsupported data is never replaced with demo quota.
 
 ## Principles
 
@@ -30,7 +30,7 @@ SuperMonitor is an open-source, self-hosted control plane for monitoring AI and 
 - Add multiple Feishu custom-bot or QQ Mail SMTP channels; Webhooks and SMTP authorization codes remain AES-GCM encrypted and are never returned to the browser.
 - Notify once when a percentage-based quota reaches 15% or below, then re-arm after the quota recovers.
 - Notify once within three days and once within one day of a provider-reported reset time.
-- Refresh connected accounts on the server every 15 minutes with startup jitter, a bounded timeout, and overlap protection, even when no browser is open. Manual refresh postpones the next scheduled run instead of creating a burst.
+- Refresh connected accounts on the server every 15 minutes with startup jitter and overlap protection, even when no browser is open. Refreshes use at most four provider calls in parallel, give each account an independent 45-second timeout, and use a configurable 10-minute whole-wave timeout (`SUPMON_SYNC_TIMEOUT`). Manual refresh postpones the next scheduled run instead of creating a burst.
 - Scan notification state every ten minutes and re-scan verified activities after every account refresh. Automatically execute only activities backed by a verified adapter. The current automatic activity is WorkBuddy CN daily check-in; failures use backoff instead of retrying every poll.
 - Delete an account and its credential, quota cache, active alerts, notification state, and delivery receipts together.
 
@@ -39,12 +39,14 @@ SuperMonitor is an open-source, self-hosted control plane for monitoring AI and 
 - Persist usage by date, account, provider, and model; deleting an account also removes its locally recorded usage.
 - Display Token trends for seven days, 30 days, one year, or all retained history.
 - Build model share only from provider-returned model identifiers. Quota percentages, credits, and balances are never converted into fabricated Token or model data.
-- TokenRhythm performs a one-time 30-day backfill from its official request-level usage list, stores only counters/model/date aggregates, and then refreshes the official current-day panel idempotently. Prompt and preview content are never requested for persistence. Other cumulative provider sources can establish a baseline and record only positive deltas without double counting or negative values after a billing reset.
+- TokenRhythm reloads the official rolling 30-day request history on every account refresh, idempotently repairs dates missed while SuperMonitor was offline, and then overwrites the current day with the fresher aggregate panel. Only counters, model, and date aggregates are stored; prompt and preview content are never persisted. Other cumulative provider sources can establish a baseline and record only positive deltas without double counting or negative values after a billing reset.
 - Operation results use temporary accessible notifications for imports, OAuth connections, notification channels, refreshes, activity runs, ordering, and deletion. Success messages dismiss automatically instead of remaining on screen.
 
 The background scheduler state is available from `GET /api/v1/sync/status`.
 
 On Windows, outbound provider clients honor proxy environment variables first and then the current user's Internet Settings proxy. This keeps the service on the same route as the browser for region-sensitive OAuth endpoints.
+
+Set `SUPMON_PROXY_URL` when the deployment needs an explicit HTTP(S) proxy. SuperMonitor writes scrubbed structured JSON logs to `SUPMON_DATA_DIR/supermonitor.log` while retaining console output; the file rotates at 10 MiB and keeps one backup. Set `SUPMON_LOG_FILE=-` only when Docker, systemd, or another supervisor already persists stdout.
 
 Uploaded files are parsed in memory and are not retained as files. Tokens are never returned to the browser.
 
@@ -75,7 +77,7 @@ npm ci
 npm run api:generate
 npm run build
 cd ..
-go build -o bin/supermonitor.exe ./cmd/supermonitor
+go build -trimpath -ldflags "-s -w -X main.version=v0.8.1" -o bin/supermonitor-v0.8.1.exe ./cmd/supermonitor
 ```
 
 Or use Docker Compose:
@@ -84,9 +86,43 @@ Or use Docker Compose:
 docker compose up --build
 ```
 
+The provided Compose file publishes only `127.0.0.1:8080`, so its explicit insecure-remote opt-in applies only inside the container boundary. If you change the host binding so other machines can reach it, set `SUPMON_ADMIN_TOKEN` and remove that opt-in.
+
+The image itself listens on `0.0.0.0:8080` inside the container. A direct `docker run` therefore refuses to start without administrator protection, even when Docker publishes the port only on loopback. The recommended direct-run setup is:
+
+```powershell
+docker build --build-arg VERSION=v0.8.1 -t supermonitor:v0.8.1 .
+$token = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLower()
+docker run --rm --name supermonitor `
+  -p 127.0.0.1:8080:8080 `
+  -e "SUPMON_ADMIN_TOKEN=$token" `
+  -v supermonitor-data:/app/data `
+  supermonitor:v0.8.1
+```
+
+For a deliberately isolated loopback-only container, `SUPMON_ALLOW_INSECURE_REMOTE=true` is an explicit alternative. Do not use that escape hatch when the published port, reverse proxy, or container network is reachable by untrusted clients.
+
 ## Security
 
 Never commit `.env`, API keys, OAuth tokens, SQLite databases, backup bundles, logs, or exported authentication files. Use `.env.example` only as a field reference.
+
+Local access remains passwordless when `SUPMON_ADMIN_TOKEN` is empty. Non-loopback listeners require a random token of at least 24 Unicode characters unless `SUPMON_ALLOW_INSECURE_REMOTE=true` explicitly acknowledges an isolated outer security boundary. Terminate HTTPS at the service or a trusted reverse proxy. The browser exchanges the token for a server-expiring 12-hour, HttpOnly, SameSite session; the token is never stored in browser local storage. API automation may alternatively send `Authorization: Bearer <token>`.
+
+Example token generation:
+
+```powershell
+[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLower()
+```
+
+When using a reverse proxy, preserve the public host and overwrite the forwarded scheme and host so same-origin checks and the Kiro OAuth callback use the external URL. For example, an Nginx location should include:
+
+```nginx
+proxy_set_header Host $http_host;
+proxy_set_header X-Forwarded-Host $http_host;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+Do not pass client-supplied forwarded headers through unchanged. Restrict direct access to the backend listener so only the trusted proxy can supply them.
 
 ## License
 

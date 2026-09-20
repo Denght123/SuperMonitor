@@ -60,8 +60,6 @@ type Accounts struct {
 
 var ErrAccountNotFound = errors.New("账号不存在")
 
-const tokenRhythmBackfillSource = "tokenrhythm-30d-v1"
-
 type kiroLoginMeta struct {
 	SessionID string
 	Alias     string
@@ -441,9 +439,12 @@ func (s *Accounts) StartKiroOAuth(alias, callbackURL string) (DeviceLoginSession
 
 func (s *Accounts) CompleteKiroOAuth(ctx context.Context, values url.Values) (string, error) {
 	state := values.Get("state")
-	s.mu.RLock()
+	s.mu.Lock()
 	meta, ok := s.kiroPending[state]
-	s.mu.RUnlock()
+	if ok {
+		delete(s.kiroPending, state)
+	}
+	s.mu.Unlock()
 	if !ok {
 		return "", fmt.Errorf("Kiro 登录会话不存在或已过期")
 	}
@@ -457,9 +458,6 @@ func (s *Accounts) CompleteKiroOAuth(ctx context.Context, values url.Values) (st
 		s.updateDeviceSession(meta.SessionID, "failed", "", err.Error())
 		return meta.SessionID, err
 	}
-	s.mu.Lock()
-	delete(s.kiroPending, state)
-	s.mu.Unlock()
 	s.updateDeviceSession(meta.SessionID, "completed", account.ID, "登录成功，Kiro 真实额度已写入账号池")
 	return meta.SessionID, nil
 }
@@ -880,16 +878,10 @@ func (s *Accounts) RefreshAll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var failures []string
-	for _, id := range ids {
-		if _, err := s.RefreshOne(ctx, id); err != nil {
-			failures = append(failures, err.Error())
-		}
-	}
-	if len(failures) > 0 {
-		return fmt.Errorf("%d 个真实账号刷新失败: %s", len(failures), strings.Join(failures, "; "))
-	}
-	return nil
+	return refreshAccountIDs(ctx, ids, defaultAccountRefreshConcurrency, defaultPerAccountRefreshTimeout, func(accountCtx context.Context, id string) error {
+		_, refreshErr := s.RefreshOne(accountCtx, id)
+		return refreshErr
+	})
 }
 
 func (s *Accounts) connectCodexWithID(ctx context.Context, id, alias, authMethod string, credential codex.Credential) (domain.AccountSummary, error) {
@@ -960,7 +952,11 @@ func (s *Accounts) connectZhipuWithID(ctx context.Context, id, alias string, cre
 	}
 	windows := make([]domain.QuotaSignal, 0, len(usage.Windows))
 	for index, window := range usage.Windows {
-		signal := domain.QuotaSignal{ID: fmt.Sprintf("zhipu-live-%d", index), Provider: "智谱 AI", Label: window.Label, Kind: window.Kind, Value: window.Remaining, Unit: window.Unit, ResetAt: window.ResetAt, Status: "healthy", Source: usage.Source, Confidence: "live"}
+		status := "healthy"
+		if window.Kind == "balance" {
+			status = balanceStatus(window.Remaining)
+		}
+		signal := domain.QuotaSignal{ID: fmt.Sprintf("zhipu-live-%d", index), Provider: "智谱 AI", Label: window.Label, Kind: window.Kind, Value: window.Remaining, Unit: window.Unit, ResetAt: window.ResetAt, Status: status, Source: usage.Source, Confidence: "live"}
 		if window.HasRemainingPercent {
 			remaining := window.RemainingPercent
 			signal.RemainingPercent = &remaining
@@ -998,38 +994,7 @@ func (s *Accounts) connectTokenRhythmWithID(ctx context.Context, id, alias strin
 }
 
 func (s *Accounts) syncTokenRhythmUsage(ctx context.Context, accountID string, credential tokenrhythm.Credential, now time.Time) {
-	var syncErrors []error
-	backfilled, err := s.store.UsageBackfillCompleted(ctx, accountID, "tokenrhythm", tokenRhythmBackfillSource)
-	if err != nil {
-		syncErrors = append(syncErrors, fmt.Errorf("读取历史回填状态: %w", err))
-	} else if !backfilled {
-		history, historyErr := s.tokenrhythm.FetchUsageHistory(ctx, credential, "30d")
-		if historyErr != nil {
-			syncErrors = append(syncErrors, fmt.Errorf("读取 30 天官方用量: %w", historyErr))
-		} else {
-			storedAll := true
-			for _, day := range history {
-				if storeErr := s.store.UpsertAbsoluteDailyUsage(ctx, day.Date, accountID, "tokenrhythm", tokenRhythmUsageReadings(day)); storeErr != nil {
-					syncErrors = append(syncErrors, fmt.Errorf("保存 %s 用量: %w", day.Date, storeErr))
-					storedAll = false
-					break
-				}
-			}
-			if storedAll {
-				if markErr := s.store.MarkUsageBackfillCompleted(ctx, accountID, "tokenrhythm", tokenRhythmBackfillSource, now); markErr != nil {
-					syncErrors = append(syncErrors, fmt.Errorf("保存历史回填状态: %w", markErr))
-				}
-			}
-		}
-	}
-
-	today, todayErr := s.tokenrhythm.FetchTodayUsage(ctx, credential)
-	if todayErr != nil {
-		syncErrors = append(syncErrors, fmt.Errorf("读取今日官方用量: %w", todayErr))
-	} else if storeErr := s.store.UpsertAbsoluteDailyUsage(ctx, today.Date, accountID, "tokenrhythm", tokenRhythmUsageReadings(today)); storeErr != nil {
-		syncErrors = append(syncErrors, fmt.Errorf("保存今日用量: %w", storeErr))
-	}
-
+	syncErrors := syncTokenRhythmUsageSnapshots(ctx, s.tokenrhythm, s.store, accountID, credential)
 	if len(syncErrors) > 0 {
 		s.events.Publish(Event{Type: "usage.sync_failed", Message: "基元律动余额已更新，但部分 Token 用量同步失败", Timestamp: now})
 	}
@@ -1175,6 +1140,13 @@ func quotaStatus(remaining float64) string {
 	}
 	if remaining <= 35 {
 		return "warning"
+	}
+	return "healthy"
+}
+
+func balanceStatus(remaining float64) string {
+	if remaining <= 0 {
+		return "critical"
 	}
 	return "healthy"
 }

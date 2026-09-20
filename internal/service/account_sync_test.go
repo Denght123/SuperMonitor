@@ -157,7 +157,7 @@ func TestDefaultAccountSyncPolicyIsLowFrequency(t *testing.T) {
 	if status.IntervalSeconds != int64((15*time.Minute)/time.Second) {
 		t.Fatalf("unexpected default sync interval: %d seconds", status.IntervalSeconds)
 	}
-	if status.TimeoutSeconds != int64((3*time.Minute)/time.Second) || status.ActivityMode != "verified_only" {
+	if status.TimeoutSeconds != int64((10*time.Minute)/time.Second) || status.ActivityMode != "verified_only" {
 		t.Fatalf("unexpected default sync policy: %#v", status)
 	}
 }

@@ -31,21 +31,37 @@ type Dependencies struct {
 	Web           http.Handler
 	Logger        *slog.Logger
 	Version       string
+	AdminToken    string
 }
 
 func New(deps Dependencies) http.Handler {
+	auth := newAdminAuth(deps.AdminToken)
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
-	router.Use(middleware.RealIP)
 	router.Use(securityHeaders)
+	router.Use(apiPrivacyHeaders)
 	router.Use(recoverer(deps.Logger))
 	router.Use(requestLogger(deps.Logger))
+	router.Use(auth.middleware)
+	// Authentication intentionally runs before RealIP. Without a configured
+	// trusted-proxy list, accepting X-Forwarded-For here would let a remote
+	// caller rotate a spoofed address to bypass login failure throttling.
+	router.Use(middleware.RealIP)
 
 	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": deps.Version})
 	})
 
 	router.Route("/api/v1", func(api chi.Router) {
+		api.Get("/auth/status", auth.status)
+		api.Post("/auth/session", auth.login)
+		api.Delete("/auth/session", auth.logout)
+		api.NotFound(func(w http.ResponseWriter, _ *http.Request) {
+			writeError(w, http.StatusNotFound, "route_not_found", "请求的 API 路径不存在")
+		})
+		api.MethodNotAllowed(func(w http.ResponseWriter, _ *http.Request) {
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "该 API 不支持此请求方法")
+		})
 		api.Get("/overview", func(w http.ResponseWriter, r *http.Request) {
 			overview, err := deps.Dashboard.Overview(r.Context())
 			if err != nil {
@@ -213,11 +229,7 @@ func New(deps Dependencies) http.Handler {
 			case "trae-cn":
 				session, err = deps.Accounts.StartTraeOAuth(r.Context(), payload.Alias)
 			case "kiro":
-				scheme := "http"
-				if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
-					scheme = "https"
-				}
-				callbackURL := scheme + "://" + r.Host + "/api/v1/providers/kiro/oauth/callback"
+				callbackURL := requestScheme(r) + "://" + requestHost(r) + "/api/v1/providers/kiro/oauth/callback"
 				session, err = deps.Accounts.StartKiroOAuth(payload.Alias, callbackURL)
 			default:
 				writeError(w, http.StatusBadRequest, "oauth_unsupported", "该平台暂不支持此 OAuth 流程")
@@ -445,27 +457,7 @@ func New(deps Dependencies) http.Handler {
 			writeJSON(w, http.StatusOK, activity)
 		})
 		api.Get("/events", func(w http.ResponseWriter, r *http.Request) {
-			flusher, ok := w.(http.Flusher)
-			if !ok {
-				writeError(w, http.StatusInternalServerError, "stream_unsupported", "服务器不支持事件流")
-				return
-			}
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Connection", "keep-alive")
-			channel, unsubscribe := deps.Events.Subscribe()
-			defer unsubscribe()
-			fmt.Fprintf(w, "event: connected\ndata: {\"status\":\"live\"}\n\n")
-			flusher.Flush()
-			for {
-				select {
-				case <-r.Context().Done():
-					return
-				case payload := <-channel:
-					fmt.Fprintf(w, "event: update\ndata: %s\n\n", payload)
-					flusher.Flush()
-				}
-			}
+			serveEventStream(w, r, deps.Events, eventStreamHeartbeatInterval)
 		})
 	})
 
@@ -479,6 +471,17 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func apiPrivacyHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isAPIPath(r.URL.Path) {
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Vary", "Authorization, Cookie, Origin")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

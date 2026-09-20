@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -29,10 +28,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
-		logger.Error("create data directory", "error", err)
+		fmt.Fprintln(os.Stderr, "create data directory:", err)
 		os.Exit(1)
+	}
+	logger, logCloser, err := newLogger(cfg.DataDir, cfg.LogFile)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if logCloser != nil {
+		defer logCloser.Close()
+	}
+	if cfg.AdminToken == "" && cfg.AllowInsecureRemote {
+		logger.Warn("administrator authentication disabled for non-loopback listener", "address", cfg.Listen)
 	}
 
 	store, err := sqlite.Open(filepath.Join(cfg.DataDir, "supermonitor.db"))
@@ -58,7 +67,7 @@ func main() {
 
 	hub := service.NewEventHub()
 	accounts := service.NewAccounts(store, vault, hub)
-	accountSync := service.NewAccountSync(accounts, hub, logger)
+	accountSync := service.NewAccountSyncWithTimeout(accounts, hub, logger, cfg.SyncTimeout)
 	dashboard := service.NewDashboard(store, hub, accounts, cfg.Environment)
 	dashboard.SetAccountSync(accountSync)
 	notifications := service.NewNotifications(store, vault, accounts, hub, logger)
@@ -72,6 +81,7 @@ func main() {
 		Web:           webui.Handler(),
 		Logger:        logger,
 		Version:       version,
+		AdminToken:    cfg.AdminToken,
 	})
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()

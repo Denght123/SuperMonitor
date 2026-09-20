@@ -26,6 +26,42 @@ func TestAllProductionAdaptersAreConnectable(t *testing.T) {
 	}
 }
 
+func TestSaveConnectedAccountUpdatesProviderLastCheckedAt(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "provider-check.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.EnsureProviderCatalog(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const stale = "2020-01-01T00:00:00Z"
+	if _, err := store.db.ExecContext(ctx, "UPDATE providers SET last_checked_at=? WHERE id=?", stale, "zhipu"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := store.SaveConnectedAccount(ctx, domain.ConnectedAccount{
+		ID: "zhipu-check", ProviderID: "zhipu", Alias: "智谱", AuthMethod: "api_key",
+		Status: "healthy", Source: "test", LastRefreshedAt: now, NextRefreshAt: now.Add(time.Minute),
+	}, []byte("encrypted")); err != nil {
+		t.Fatal(err)
+	}
+	providers, err := store.Providers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range providers {
+		if provider.ID == "zhipu" {
+			if !provider.LastCheckedAt.Equal(now) {
+				t.Fatalf("lastCheckedAt = %s, want %s", provider.LastCheckedAt, now)
+			}
+			return
+		}
+	}
+	t.Fatal("zhipu provider not found")
+}
+
 func TestDeleteConnectedAccountRemovesCredentialAndQuotaWindows(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "delete.db"))
 	if err != nil {

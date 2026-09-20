@@ -1,11 +1,57 @@
 openapi: 3.1.0
 info:
   title: SuperMonitor API
-  version: 0.8.0
+  version: 0.8.1
   description: Monitoring-only API. It intentionally exposes no model proxy endpoints.
 servers:
   - url: /api/v1
+security:
+  - AdminSession: []
+  - BearerAuth: []
 paths:
+  /auth/status:
+    get:
+      security: []
+      operationId: getAuthenticationStatus
+      responses:
+        "200":
+          description: Whether administrator authentication is enabled and the current browser session is authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthStatus" }
+  /auth/session:
+    post:
+      security: []
+      operationId: createAuthenticationSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  minLength: 24
+                  writeOnly: true
+                  description: Administrator token containing at least 24 Unicode characters
+      responses:
+        "200":
+          description: HttpOnly administrator session created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthStatus" }
+        "401":
+          description: Administrator token is invalid
+    delete:
+      operationId: deleteAuthenticationSession
+      responses:
+        "200":
+          description: Browser administrator session cleared
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthStatus" }
   /overview:
     get:
       operationId: getOverview
@@ -173,6 +219,36 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeviceLoginSession" }
+  /providers/kiro/oauth/callback:
+    get:
+      security: []
+      operationId: completeKiroOAuth
+      description: Public one-time OAuth callback protected by the server-held state and PKCE verifier.
+      parameters:
+        - in: query
+          name: state
+          required: true
+          schema: { type: string }
+        - in: query
+          name: code
+          schema: { type: string }
+        - in: query
+          name: error
+          schema: { type: string }
+        - in: query
+          name: login_option
+          schema: { type: string }
+      responses:
+        "200":
+          description: Kiro authorization completed; the browser may close this page
+          content:
+            text/html:
+              schema: { type: string }
+        "400":
+          description: Invalid, expired, denied, or failed Kiro authorization callback
+          content:
+            text/html:
+              schema: { type: string }
   /providers/codex/accounts/import:
     post:
       operationId: importCodexAccount
@@ -360,7 +436,23 @@ paths:
         "200":
           description: Server-sent event stream
 components:
+  securitySchemes:
+    AdminSession:
+      type: apiKey
+      in: cookie
+      name: supermonitor_admin
+      description: Server-issued 12-hour HttpOnly administrator session
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: SUPMON_ADMIN_TOKEN for API automation
   schemas:
+    AuthStatus:
+      type: object
+      required: [required, authenticated]
+      properties:
+        required: { type: boolean }
+        authenticated: { type: boolean }
     AccountSyncStatus:
       type: object
       required: [enabled, intervalSeconds, timeoutSeconds, startupDelaySeconds, running, lastResult, activityMode]
@@ -461,13 +553,12 @@ components:
           items: { $ref: "#/components/schemas/Alert" }
     KPI:
       type: object
-      required: [id, label, value, unit, delta, tone]
+      required: [id, label, value, unit, tone]
       properties:
         id: { type: string }
         label: { type: string }
         value: { type: number }
         unit: { type: string }
-        delta: { type: number }
         tone: { type: string }
     DailyUsage:
       type: object

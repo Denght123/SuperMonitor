@@ -492,7 +492,7 @@ func (c *Client) authenticatedRequest(ctx context.Context, endpoint string, cred
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Cookie", "tr_session="+token+"; tr_ref_device="+strings.TrimSpace(credential.RefDevice))
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 SuperMonitor/0.8.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 SuperMonitor/0.8.1")
 	return req, nil
 }
 

@@ -85,6 +85,25 @@ func TestAccountSyncStatusEndpoint(t *testing.T) {
 	}
 }
 
+func TestUnknownAPIRouteReturnsStructuredJSONError(t *testing.T) {
+	handler := api.New(api.Dependencies{
+		Events: service.NewEventHub(), Web: http.NotFoundHandler(),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Version: "test",
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/does-not-exist", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+	if contentType := response.Header().Get("Content-Type"); contentType != "application/json; charset=utf-8" {
+		t.Fatalf("content type = %q", contentType)
+	}
+	if body := response.Body.String(); !strings.Contains(body, `"code":"route_not_found"`) {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
 func TestDeleteAccountEndpointRemovesAccountFromOverviewAndActivities(t *testing.T) {
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "delete-api.db"))
 	if err != nil {

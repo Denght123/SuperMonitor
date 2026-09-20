@@ -403,6 +403,9 @@ func (s *Store) SaveConnectedAccount(ctx context.Context, account domain.Connect
 			return err
 		}
 	}
+	if _, err = tx.ExecContext(ctx, "UPDATE providers SET last_checked_at = ? WHERE id = ?", now.Format(time.RFC3339), account.ProviderID); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
