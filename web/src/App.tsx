@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Activity, AlertTriangle, Bell, Bot, Boxes, Check, ChevronRight, CircleGauge, Clock3,
+  Activity, AlertTriangle, ArrowDown, ArrowUp, Bell, Bot, Boxes, Check, ChevronRight, CircleGauge, Clock3,
   Database, ExternalLink, FileJson, Globe2, KeyRound, LayoutDashboard, LoaderCircle, Moon,
   Mail, Plus, RefreshCw, ScanSearch, Search, Send, Settings, ShieldCheck, Sun, Trash2, Upload, X, Zap,
 } from 'lucide-react'
@@ -14,6 +14,8 @@ import { useOverview } from './hooks/useOverview'
 import { compactNumber, formatMetric, quotaValue, relativeTime } from './lib/format'
 import { filterUsageByRange, usageRangeDescription, usageRangeOptions, type UsageRange } from './lib/usageRange'
 import { ProviderLogo } from './components/ProviderLogo'
+import { useToast } from './hooks/useToast'
+import { moveProviderInOrder, normalizeProviderOrder, readProviderOrder, sortProviderEntries, writeProviderOrder, type ProviderOrderDirection } from './lib/providerOrder'
 
 type Page = 'overview' | 'accounts' | 'usage' | 'activities' | 'alerts' | 'settings'
 type Theme = 'light' | 'dark' | 'system'
@@ -42,10 +44,13 @@ function initialTheme(): Theme {
 }
 
 export function App() {
+  const { notify } = useToast()
   const [page, setPage] = useState<Page>('overview')
   const [theme, setTheme] = useState<Theme>(initialTheme)
   const [selectedAccount, setSelectedAccount] = useState<AccountSummary | null>(null)
-  const { data, loading, refreshing, error, streamStatus, lastEvent, refresh, retry } = useOverview()
+  const [providerOrder, setProviderOrder] = useState(readProviderOrder)
+  const { data, loading, refreshing, error, streamStatus, refresh, retry } = useOverview()
+  const visibleProviderIds = useMemo(() => data ? [...new Set(data.accounts.map((account) => account.providerId))] : [], [data])
 
   useEffect(() => {
     const root = document.documentElement
@@ -57,12 +62,37 @@ export function App() {
     return () => media.removeEventListener('change', apply)
   }, [theme])
 
+  useEffect(() => {
+    setProviderOrder((current) => {
+      const next = normalizeProviderOrder(current, visibleProviderIds)
+      if (sameStringArray(current, next)) return current
+      writeProviderOrder(next)
+      return next
+    })
+  }, [visibleProviderIds])
+
   const changePage = (next: Page) => {
     if (next === page) return
     if (document.startViewTransition) document.startViewTransition(() => setPage(next))
     else setPage(next)
   }
   const cycleTheme = () => setTheme((value) => value === 'light' ? 'dark' : value === 'dark' ? 'system' : 'light')
+  const refreshAll = async () => {
+    try {
+      const result = await refresh()
+      notify({ tone: 'success', title: '全部账号刷新成功', message: result.message || '最新额度和活动状态已经写入总览。' })
+    } catch (reason) {
+      notify({ tone: 'error', title: '刷新全部失败', message: reason instanceof Error ? reason.message : '请检查网络与平台认证后重试。' })
+    }
+  }
+  const moveProvider = useCallback((providerId: string, direction: ProviderOrderDirection, providerName: string) => {
+    setProviderOrder((current) => {
+      const next = moveProviderInOrder(current, visibleProviderIds, providerId, direction)
+      writeProviderOrder(next)
+      return next
+    })
+    notify({ tone: 'info', title: '显示顺序已保存', message: `${providerName} 已${direction === 'up' ? '上移' : '下移'}，总览与账号池将保持一致。` })
+  }, [notify, visibleProviderIds])
 
   return (
     <div className="app-shell">
@@ -79,7 +109,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.7.0</small></div>
+        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.8.0</small></div>
       </aside>
 
       <main className="main-stage">
@@ -90,7 +120,7 @@ export function App() {
               {theme === 'light' ? <Sun size={20} /> : theme === 'dark' ? <Moon size={20} /> : <Settings size={20} />}
               <span>{theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统'}</span>
             </button>
-            <button className="refresh-button" onClick={() => void refresh()} disabled={refreshing}>
+            <button className="refresh-button" onClick={() => void refreshAll()} disabled={refreshing}>
               <RefreshCw size={19} className={refreshing ? 'spin' : ''} />{refreshing ? '刷新中' : '刷新全部'}
             </button>
           </div>
@@ -101,11 +131,10 @@ export function App() {
           <div className="data-clock"><Clock3 size={18} /><span>最近同步</span><strong>{data ? new Date(data.generatedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '--:--:--'}</strong></div>
         </section>
         {error ? <div className="error-banner"><AlertTriangle size={20} /><span>{error}</span><button onClick={() => void retry()}>重试</button></div> : null}
-        {lastEvent ? <div className="event-toast"><Check size={17} />{lastEvent}</div> : null}
 
         <div className="page-surface" key={page}>
           {loading || !data ? <DashboardSkeleton /> : (
-            <PageContent page={page} data={data} onSelectAccount={setSelectedAccount} onReload={() => void retry(true)} />
+            <PageContent page={page} data={data} providerOrder={providerOrder} onMoveProvider={moveProvider} onSelectAccount={setSelectedAccount} onReload={() => void retry(true)} />
           )}
         </div>
       </main>
@@ -114,22 +143,22 @@ export function App() {
   )
 }
 
-function PageContent({ page, data, onSelectAccount, onReload }: { page: Page; data: Overview; onSelectAccount: (account: AccountSummary) => void; onReload: () => void }) {
-  if (page === 'overview') return <OverviewPage data={data} onSelectAccount={onSelectAccount} />
-  if (page === 'accounts') return <AccountsPage accounts={data.accounts} onSelectAccount={onSelectAccount} onReload={onReload} />
+function PageContent({ page, data, providerOrder, onMoveProvider, onSelectAccount, onReload }: { page: Page; data: Overview; providerOrder: string[]; onMoveProvider: (providerId: string, direction: ProviderOrderDirection, providerName: string) => void; onSelectAccount: (account: AccountSummary) => void; onReload: () => void }) {
+  if (page === 'overview') return <OverviewPage data={data} providerOrder={providerOrder} onMoveProvider={onMoveProvider} onSelectAccount={onSelectAccount} />
+  if (page === 'accounts') return <AccountsPage accounts={data.accounts} providerOrder={providerOrder} onMoveProvider={onMoveProvider} onSelectAccount={onSelectAccount} onReload={onReload} />
   if (page === 'usage') return <UsagePage data={data} />
   if (page === 'activities') return <ActivitiesPage onReload={onReload} />
   if (page === 'alerts') return <AlertsPage alerts={data.alerts} />
   return <SettingsPage />
 }
 
-function OverviewPage({ data, onSelectAccount }: { data: Overview; onSelectAccount: (account: AccountSummary) => void }) {
+function OverviewPage({ data, providerOrder, onMoveProvider, onSelectAccount }: { data: Overview; providerOrder: string[]; onMoveProvider: (providerId: string, direction: ProviderOrderDirection, providerName: string) => void; onSelectAccount: (account: AccountSummary) => void }) {
   return <>
     <KPIBand data={data} />
     <div className="chart-deck"><TokenChart data={data} /><ModelDonut data={data} /></div>
     <section className="section-block">
       <div className="section-header"><div><h2>额度窗口</h2><p>颜色按剩余比例变化，时间为平台返回的精确重置或到期时间。</p></div></div>
-      {data.accounts.length ? <AccountQuotaGroups accounts={data.accounts} onSelectAccount={onSelectAccount} /> : <EmptyState title="暂无真实额度" detail="连接账号后，这里会按账号显示平台返回的余额、积分或限额窗口。" />}
+      {data.accounts.length ? <AccountQuotaGroups accounts={data.accounts} providerOrder={providerOrder} onMoveProvider={onMoveProvider} onSelectAccount={onSelectAccount} /> : <EmptyState title="暂无真实额度" detail="连接账号后，这里会按账号显示平台返回的余额、积分或限额窗口。" />}
     </section>
   </>
 }
@@ -148,7 +177,7 @@ function TokenChart({ data }: { data: Overview }) {
 
   return <section className="instrument-panel token-panel">
     <div className="panel-header token-chart-header"><div><h2>Token 轨迹</h2><p>输入、输出、缓存与请求量 · {usageRangeDescription(range, visibleData.length)}</p></div>{rangeControl}</div>
-    {visibleData.length ? <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={visibleData} margin={{ top: 10, right: 6, left: -8, bottom: 0 }}><CartesianGrid stroke="var(--chart-grid)" vertical={false} /><XAxis dataKey="date" tickFormatter={(value: string) => showYear ? value.slice(0, 7).replace('-', '/') : value.slice(5)} tick={{ fill: 'var(--text-muted)', fontSize: 13 }} axisLine={false} tickLine={false} minTickGap={range === '7d' ? 12 : range === '30d' ? 26 : 48} /><YAxis yAxisId="tokens" tickFormatter={compactNumber} tick={{ fill: 'var(--text-muted)', fontSize: 13 }} axisLine={false} tickLine={false} /><YAxis yAxisId="requests" hide orientation="right" /><Tooltip content={<TokenTooltip />} /><Bar yAxisId="tokens" dataKey="cacheTokens" stackId="tokens" fill="var(--chart-cache)" /><Bar yAxisId="tokens" dataKey="inputTokens" stackId="tokens" fill="var(--chart-input)" /><Bar yAxisId="tokens" dataKey="outputTokens" stackId="tokens" fill="var(--chart-output)" radius={[4, 4, 0, 0]} /><Line yAxisId="requests" dataKey="requests" stroke="var(--chart-line)" strokeWidth={2} dot={false} /></ComposedChart></ResponsiveContainer></div> : <EmptyState title={data.tokenTrend.length ? '此时间段暂无 Token 用量' : '暂无 Token 用量'} detail={data.tokenTrend.length ? '切换到更长的时间范围，或等待新的用量记录写入。' : '平台返回可记录的模型用量后会生成趋势图。'} />}
+    {visibleData.length ? <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={visibleData} margin={{ top: 10, right: 6, left: -8, bottom: 0 }}><CartesianGrid stroke="var(--chart-grid)" vertical={false} /><XAxis dataKey="date" tickFormatter={(value: string) => showYear ? value.slice(0, 7).replace('-', '/') : value.slice(5)} tick={{ fill: 'var(--text-muted)', fontSize: 13 }} axisLine={false} tickLine={false} minTickGap={range === '7d' ? 12 : range === '30d' ? 26 : 48} /><YAxis yAxisId="tokens" tickFormatter={compactNumber} tick={{ fill: 'var(--text-muted)', fontSize: 13 }} axisLine={false} tickLine={false} /><YAxis yAxisId="requests" hide orientation="right" /><Tooltip content={<TokenTooltip />} /><Bar yAxisId="tokens" dataKey="cacheTokens" stackId="tokens" fill="var(--chart-cache)" /><Bar yAxisId="tokens" dataKey="inputTokens" stackId="tokens" fill="var(--chart-input)" /><Bar yAxisId="tokens" dataKey="outputTokens" stackId="tokens" fill="var(--chart-output)" radius={[4, 4, 0, 0]} /><Line yAxisId="requests" dataKey="requests" stroke="var(--chart-line)" strokeWidth={2} dot={false} /></ComposedChart></ResponsiveContainer></div> : <EmptyState title={data.tokenTrend.length ? '此时间段暂无 Token 用量' : '暂无 Token 用量'} detail={data.tokenTrend.length ? '切换到更长的时间范围，或等待新的用量记录写入。' : '平台返回可验证的 Token 用量后会生成趋势图。'} />}
   </section>
 }
 
@@ -160,7 +189,7 @@ function TokenTooltip({ active, payload, label }: { active?: boolean; payload?: 
 function ModelDonut({ data }: { data: Overview }) {
   const total = data.modelUsage.reduce((sum, item) => sum + item.tokens, 0)
   if (!data.modelUsage.length || total <= 0) return <section className="instrument-panel model-panel"><div className="panel-header"><div><h2>模型用量分布</h2><p>仅统计带模型字段的 Token</p></div></div><EmptyState title="暂无模型分布" detail="真实模型用量写入后会自动生成占比。" /></section>
-  return <section className="instrument-panel model-panel"><div className="panel-header"><div><h2>模型用量分布</h2><p>仅统计带模型字段的 Token</p></div></div><div className="donut-wrap"><ResponsiveContainer width="100%" height={220}><PieChart><Pie data={data.modelUsage} dataKey="tokens" nameKey="model" innerRadius={65} outerRadius={92} paddingAngle={2} stroke="none">{data.modelUsage.map((entry) => <Cell key={entry.model} fill={entry.color} />)}</Pie><Tooltip formatter={(value) => compactNumber(Number(value))} /></PieChart></ResponsiveContainer><div className="donut-total"><span>30 天合计</span><strong>{compactNumber(total)}</strong><small>tokens</small></div></div><div className="model-list">{data.modelUsage.map((item) => <div key={item.model}><i style={{ background: item.color }} /><span>{item.model}</span><b>{((item.tokens / total) * 100).toFixed(1)}%</b></div>)}</div></section>
+  return <section className="instrument-panel model-panel"><div className="panel-header"><div><h2>模型用量分布</h2><p>仅统计平台返回真实模型字段的 Token</p></div></div><div className="donut-wrap"><ResponsiveContainer width="100%" height={220}><PieChart><Pie data={data.modelUsage} dataKey="tokens" nameKey="model" innerRadius={65} outerRadius={92} paddingAngle={2} stroke="none">{data.modelUsage.map((entry) => <Cell key={entry.model} fill={entry.color} />)}</Pie><Tooltip formatter={(value) => compactNumber(Number(value))} /></PieChart></ResponsiveContainer><div className="donut-total"><span>自接入起</span><strong>{compactNumber(total)}</strong><small>tokens</small></div></div><div className="model-list">{data.modelUsage.map((item) => <div key={item.model}><i style={{ background: item.color }} /><span>{item.model}</span><b>{((item.tokens / total) * 100).toFixed(1)}%</b></div>)}</div></section>
 }
 
 function QuotaProgress({ signal }: { signal: QuotaSignal }) {
@@ -176,13 +205,13 @@ function QuotaProgress({ signal }: { signal: QuotaSignal }) {
   </article>
 }
 
-function AccountQuotaGroups({ accounts, onSelectAccount }: { accounts: AccountSummary[]; onSelectAccount: (account: AccountSummary) => void }) {
+function AccountQuotaGroups({ accounts, providerOrder, onMoveProvider, onSelectAccount }: { accounts: AccountSummary[]; providerOrder: string[]; onMoveProvider: (providerId: string, direction: ProviderOrderDirection, providerName: string) => void; onSelectAccount: (account: AccountSummary) => void }) {
   const groups = useMemo(() => {
     const result = new Map<string, AccountSummary[]>()
     accounts.forEach((account) => result.set(account.providerId, [...(result.get(account.providerId) ?? []), account]))
-    return [...result.entries()]
-  }, [accounts])
-  return <div className="quota-groups">{groups.map(([providerId, items]) => <section className="quota-provider-group" key={providerId}><div className="quota-provider-heading"><div className="provider-section-title"><ProviderLogo providerId={providerId} name={items[0].provider} /><span><strong>{items[0].provider}</strong><small>{items.length} 个账号</small></span></div><small>按账号独立显示</small></div><div className="quota-account-grid">{items.map((account) => <AccountQuotaCard key={account.id} account={account} onSelect={() => onSelectAccount(account)} />)}</div></section>)}</div>
+    return sortProviderEntries([...result.entries()], providerOrder)
+  }, [accounts, providerOrder])
+  return <div className="quota-groups">{groups.map(([providerId, items], index) => <section className="quota-provider-group" key={providerId}><div className="quota-provider-heading"><div className="provider-section-title"><ProviderLogo providerId={providerId} name={items[0].provider} /><span><strong>{items[0].provider}</strong><small>{items.length} 个账号</small></span></div><ProviderOrderControls providerId={providerId} providerName={items[0].provider} index={index} total={groups.length} onMove={onMoveProvider} /></div><div className="quota-account-grid">{items.map((account) => <AccountQuotaCard key={account.id} account={account} onSelect={() => onSelectAccount(account)} />)}</div></section>)}</div>
 }
 
 function AccountQuotaCard({ account, onSelect }: { account: AccountSummary; onSelect: () => void }) {
@@ -211,14 +240,23 @@ function AccountGrid({ accounts, onSelectAccount }: { accounts: AccountSummary[]
   return <div className="account-grid">{accounts.map((account) => <AccountQuotaCard key={account.id} account={account} onSelect={() => onSelectAccount(account)} />)}</div>
 }
 
-function ProviderAccountSections({ accounts, onSelectAccount }: { accounts: AccountSummary[]; onSelectAccount: (account: AccountSummary) => void }) {
+function ProviderAccountSections({ accounts, providerOrder, onMoveProvider, onSelectAccount }: { accounts: AccountSummary[]; providerOrder: string[]; onMoveProvider: (providerId: string, direction: ProviderOrderDirection, providerName: string) => void; onSelectAccount: (account: AccountSummary) => void }) {
   if (!accounts.length) return <EmptyState title="还没有账号" detail="从下方平台列表添加你的第一个账号。" />
   const groups = new Map<string, AccountSummary[]>()
   accounts.forEach((account) => groups.set(account.providerId, [...(groups.get(account.providerId) ?? []), account]))
-  return <div className="provider-account-sections">{[...groups.entries()].map(([providerId, items]) => <section className="provider-account-section" key={providerId}><header><div className="provider-section-title"><ProviderLogo providerId={providerId} name={items[0].provider} /><span><strong>{items[0].provider}</strong><small>{items.length} 个已连接账号</small></span></div><span className="adapter-state live">实时额度</span></header><AccountGrid accounts={items} onSelectAccount={onSelectAccount} /></section>)}</div>
+  const orderedGroups = sortProviderEntries([...groups.entries()], providerOrder)
+  return <div className="provider-account-sections">{orderedGroups.map(([providerId, items], index) => <section className="provider-account-section" key={providerId}><header><div className="provider-section-title"><ProviderLogo providerId={providerId} name={items[0].provider} /><span><strong>{items[0].provider}</strong><small>{items.length} 个已连接账号</small></span></div><div className="provider-heading-actions"><span className="adapter-state live">实时额度</span><ProviderOrderControls providerId={providerId} providerName={items[0].provider} index={index} total={orderedGroups.length} onMove={onMoveProvider} /></div></header><AccountGrid accounts={items} onSelectAccount={onSelectAccount} /></section>)}</div>
 }
 
-function AccountsPage({ accounts, onSelectAccount, onReload }: { accounts: AccountSummary[]; onSelectAccount: (account: AccountSummary) => void; onReload: () => void }) {
+function ProviderOrderControls({ providerId, providerName, index, total, onMove }: { providerId: string; providerName: string; index: number; total: number; onMove: (providerId: string, direction: ProviderOrderDirection, providerName: string) => void }) {
+  return <div className="provider-order-controls" role="group" aria-label={`${providerName} 显示顺序`}>
+    <span>顺序</span>
+    <button type="button" onClick={() => onMove(providerId, 'up', providerName)} disabled={index === 0} aria-label={`将 ${providerName} 上移`} title="向前显示"><ArrowUp size={15} /></button>
+    <button type="button" onClick={() => onMove(providerId, 'down', providerName)} disabled={index === total - 1} aria-label={`将 ${providerName} 下移`} title="向后显示"><ArrowDown size={15} /></button>
+  </div>
+}
+
+function AccountsPage({ accounts, providerOrder, onMoveProvider, onSelectAccount, onReload }: { accounts: AccountSummary[]; providerOrder: string[]; onMoveProvider: (providerId: string, direction: ProviderOrderDirection, providerName: string) => void; onSelectAccount: (account: AccountSummary) => void; onReload: () => void }) {
   const [providers, setProviders] = useState<Provider[]>([])
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Provider | null>(null)
@@ -226,13 +264,14 @@ function AccountsPage({ accounts, onSelectAccount, onReload }: { accounts: Accou
   const filtered = useMemo(() => providers.filter((provider) => `${provider.name}${provider.category}${provider.description}`.toLowerCase().includes(query.toLowerCase())), [providers, query])
   const groups = ['国内平台', '国际平台']
   return <>
-    <section className="section-block"><div className="section-header"><div><h2>已连接账号</h2><p>按应用归类 · {accounts.length} 个真实账号</p></div></div><ProviderAccountSections accounts={accounts} onSelectAccount={onSelectAccount} /></section>
+    <section className="section-block"><div className="section-header"><div><h2>已连接账号</h2><p>按应用归类 · {accounts.length} 个真实账号 · 顺序会自动保存</p></div></div><ProviderAccountSections accounts={accounts} providerOrder={providerOrder} onMoveProvider={onMoveProvider} onSelectAccount={onSelectAccount} /></section>
     <section className="section-block provider-section"><div className="section-header"><div><h2>添加平台账号</h2><p>每个平台独立添加；只有专属认证与真实额度字段完成验证后才开放连接。</p></div><label className="provider-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索平台" /></label></div>{groups.map((group) => <div key={group} className="provider-group"><h3>{group}</h3><div className="provider-grid">{filtered.filter((provider) => provider.category === group).map((provider) => <article className={`provider-card ${provider.liveAuth ? '' : 'is-researching'}`} key={provider.id}><div className="provider-card-top"><ProviderLogo providerId={provider.id} name={provider.name} /><span className={`adapter-state ${provider.liveAuth ? 'live' : 'pending'}`}>{provider.liveAuth ? '可连接' : '接入验证中'}</span></div><h4>{provider.name}</h4><p>{provider.description}</p><div className="capability-row">{provider.capabilities.slice(0, 3).map((capability) => <span key={capability}>{capabilityLabel(capability)}</span>)}</div><button className={provider.liveAuth ? 'provider-action active' : 'provider-action'} onClick={() => provider.liveAuth && setSelected(provider)} disabled={!provider.liveAuth}>{provider.liveAuth ? <><Plus size={17} />添加账号</> : '专属接入尚未开放'}</button></article>)}</div></div>)}</section>
     {selected ? <ProviderConnectDialog provider={selected} onClose={() => setSelected(null)} onConnected={() => { setSelected(null); onReload() }} /> : null}
   </>
 }
 
 function ProviderConnectDialog({ provider, onClose, onConnected }: { provider: Provider; onClose: () => void; onConnected: () => void }) {
+  const { notify } = useToast()
   const [alias, setAlias] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [secret, setSecret] = useState('')
@@ -261,17 +300,41 @@ function ProviderConnectDialog({ provider, onClose, onConnected }: { provider: P
       const statusRequest = session.provider === 'codex' ? api.codexDeviceLoginStatus(session.id) : api.providerOAuthStatus(session.provider, session.id)
       void statusRequest.then((next) => {
         setSession(next)
-        if (next.status === 'completed') { window.clearInterval(timer); window.setTimeout(onConnected, 900) }
-        if (next.status === 'failed') { window.clearInterval(timer); setBusy(false); setError(next.message) }
-      }).catch((reason: Error) => { window.clearInterval(timer); setBusy(false); setError(reason.message) })
+        if (next.status === 'completed') {
+          window.clearInterval(timer)
+          notify({ tone: 'success', title: `${provider.name} 授权成功`, message: '账号已加入账号池，真实额度正在同步。' })
+          window.setTimeout(onConnected, 900)
+        }
+        if (next.status === 'failed') {
+          window.clearInterval(timer)
+          setBusy(false)
+          setError(next.message)
+          notify({ tone: 'error', title: `${provider.name} 授权失败`, message: next.message })
+        }
+      }).catch((reason: Error) => {
+        window.clearInterval(timer)
+        setBusy(false)
+        setError(reason.message)
+        notify({ tone: 'error', title: `${provider.name} 登录状态读取失败`, message: reason.message })
+      })
     }, 2500)
     return () => window.clearInterval(timer)
-  }, [session, onConnected])
+  }, [notify, onConnected, provider.name, session])
 
   const importFile = async () => {
     if (!file) { setError('请先选择认证文件'); return }
     setBusy(true); setError('')
-    try { await api.importCredential(provider.id, file, alias); setFile(null); onConnected() } catch (reason) { setError(reason instanceof Error ? reason.message : '导入失败'); setBusy(false) }
+    try {
+      const account = await api.importCredential(provider.id, file, alias)
+      setFile(null)
+      notify({ tone: 'success', title: '认证文件导入成功', message: `${account.alias || provider.name} 已加入账号池并完成首次额度读取。` })
+      onConnected()
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : '导入失败'
+      setError(message)
+      setBusy(false)
+      notify({ tone: 'error', title: '认证文件导入失败', message })
+    }
   }
   const startOAuth = async () => {
     setBusy(true); setError('')
@@ -279,13 +342,30 @@ function ProviderConnectDialog({ provider, onClose, onConnected }: { provider: P
       const next = isCodex ? await api.startCodexDeviceLogin(alias) : await api.startProviderOAuth(provider.id, alias)
       setSession(next)
       setBusy(false)
+      notify({ tone: 'info', title: `${provider.name} 授权已启动`, message: '请在官方页面完成登录，本页面会自动读取授权结果。' })
       if (!isWorkBuddy) window.open(next.verifyUrl, '_blank', 'noopener,noreferrer')
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '无法启动登录'); setBusy(false) }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : '无法启动登录'
+      setError(message)
+      setBusy(false)
+      notify({ tone: 'error', title: `${provider.name} 授权无法启动`, message })
+    }
   }
   const connectSecret = async () => {
     if (!secret.trim() || (provider.id === 'bailian' && !secret2.trim())) { setError(secretConfig(provider.id).emptyError); return }
     setBusy(true); setError('')
-    try { await api.connectSecret(provider.id, alias, secret, secret2); setSecret(''); setSecret2(''); onConnected() } catch (reason) { setError(reason instanceof Error ? reason.message : '连接失败'); setBusy(false) }
+    try {
+      const account = await api.connectSecret(provider.id, alias, secret, secret2)
+      setSecret('')
+      setSecret2('')
+      notify({ tone: 'success', title: `${provider.name} 连接成功`, message: `${account.alias || provider.name} 已加入账号池并完成真实额度读取。` })
+      onConnected()
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : '连接失败'
+      setError(message)
+      setBusy(false)
+      notify({ tone: 'error', title: `${provider.name} 连接失败`, message })
+    }
   }
   const fileCopy = credentialFileCopy(provider.id)
   const secretCopy = secretConfig(provider.id)
@@ -334,23 +414,40 @@ function secretConfig(providerId: string) {
 
 function UsagePage({ data }: { data: Overview }) { return <><KPIBand data={data} /><div className="chart-deck"><TokenChart data={data} /><ModelDonut data={data} /></div></> }
 function ActivitiesPage({ onReload }: { onReload: () => void }) {
+  const { notify } = useToast()
   const [items, setItems] = useState<ActivityItem[]>([])
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState<string[]>([])
   const [error, setError] = useState('')
   const load = () => { setLoading(true); setError(''); void api.activities().then((payload) => { setItems(payload.items); setError(payload.warning ?? '') }).catch((reason: Error) => setError(reason.message)).finally(() => setLoading(false)) }
   useEffect(load, [])
-  const run = async (item: ActivityItem) => {
+  const run = async (item: ActivityItem, announce = true) => {
     setRunning((current) => [...current, item.accountId]); setError('')
     try {
       const next = await api.runActivity(item.accountId, item.id)
       setItems((current) => current.map((entry) => entry.accountId === item.accountId && entry.id === item.id ? next : entry))
       onReload()
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '活动执行失败') }
+      if (announce) notify({ tone: 'success', title: `${item.title}执行成功`, message: `${item.accountAlias} 的活动状态和额度已更新。` })
+      return true
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : '活动执行失败'
+      setError(message)
+      if (announce) notify({ tone: 'error', title: `${item.title}执行失败`, message })
+      return false
+    }
     finally { setRunning((current) => current.filter((id) => id !== item.accountId)) }
   }
   const available = items.filter((item) => item.status === 'available')
-  const runAll = async () => { for (const item of available) await run(item) }
+  const runAll = async () => {
+    let succeeded = 0
+    for (const item of available) if (await run(item, false)) succeeded += 1
+    const failed = available.length - succeeded
+    notify({
+      tone: failed ? 'error' : 'success',
+      title: failed ? '部分活动未完成' : '全部活动执行成功',
+      message: `成功 ${succeeded} 项${failed ? `，失败 ${failed} 项，请查看页面错误后重试。` : '，额度状态已同步。'}`,
+    })
+  }
   return <section className="section-block"><div className="section-header"><div><h2>可执行活动</h2><p>只展示后端已通过官方接口确认存在的真实活动。</p></div><button className="primary-button" onClick={() => void runAll()} disabled={!available.length || running.length > 0}>{running.length ? <LoaderCircle className="spin" size={17} /> : <Zap size={17} />}全部签到</button></div>
     {error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}
     {loading ? <div className="activity-loading"><LoaderCircle className="spin" size={20} />正在读取平台活动状态</div> : items.length ? <div className="activity-grid">{items.map((item) => { const busy = running.includes(item.accountId); const completed = item.status === 'completed'; const unavailable = item.status === 'error'; return <article className={`activity-card ${completed ? 'completed' : unavailable ? 'error' : ''}`} key={`${item.accountId}-${item.id}`}><div className="activity-icon">{completed ? <Check size={20} /> : unavailable ? <AlertTriangle size={20} /> : <Zap size={20} />}</div><div className="activity-copy"><span>{item.provider}</span><strong>{item.accountAlias} · {item.title}</strong><small>{item.description}</small></div><button className={completed ? 'secondary-button completed' : unavailable ? 'secondary-button' : 'primary-button'} onClick={() => void run(item)} disabled={completed || unavailable || busy}>{busy ? <LoaderCircle className="spin" size={17} /> : completed ? <Check size={17} /> : unavailable ? <AlertTriangle size={17} /> : <Zap size={17} />}{completed ? '今日已完成' : unavailable ? '状态读取失败' : '立即签到'}</button></article> })}</div> : <EmptyState title="当前账号池没有可执行活动" detail="Codex 等没有签到活动的平台不会出现在这里；接入支持活动的国内 WorkBuddy 账号后会自动显示。" />}
@@ -358,12 +455,11 @@ function ActivitiesPage({ onReload }: { onReload: () => void }) {
 }
 function AlertsPage({ alerts }: { alerts: Alert[] }) { return <section className="section-block alert-list"><div className="section-header"><div><h2>未解决告警</h2><p>同一故障自动去重；额度恢复或提醒窗口结束后会自动移除。</p></div></div>{alerts.map((alert) => <article key={alert.id} className={`alert-item severity-${alert.severity}`}><AlertTriangle size={22} /><div><span>{alert.provider} · {relativeTime(alert.createdAt)}</span><strong>{alert.title}</strong><p>{alert.message}</p><small>建议：{alert.recovery}</small></div></article>)}</section> }
 function SettingsPage() {
+  const { notify } = useToast()
   const [channels, setChannels] = useState<NotificationChannel[]>([])
   const [policy, setPolicy] = useState<NotificationPolicy | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
-  const [success, setSuccess] = useState('')
-  const [actionError, setActionError] = useState('')
   const [creating, setCreating] = useState<NotificationChannelKind | null>(null)
   const [testingID, setTestingID] = useState('')
   const [deletingID, setDeletingID] = useState('')
@@ -391,7 +487,6 @@ function SettingsPage() {
 
   useEffect(() => { void loadSettings() }, [loadSettings])
 
-  const clearFeedback = () => { setSuccess(''); setActionError('') }
   const createChannel = async (kind: NotificationChannelKind, event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (creating) return
@@ -400,9 +495,9 @@ function SettingsPage() {
       : (!mail.sender.trim() ? '请输入 QQ 发件邮箱' : !mail.sender.trim().toLowerCase().endsWith('@qq.com') ? '发件人必须是 QQ 邮箱地址' : !mail.authCode.trim() ? '请输入 SMTP 授权码' : !mail.recipient.trim() ? '请输入收件邮箱' : '')
     if (error) {
       setFormErrors((current) => ({ ...current, [kind]: error }))
+      notify({ tone: 'error', title: '通知渠道信息不完整', message: error })
       return
     }
-    clearFeedback()
     setFormErrors((current) => ({ ...current, [kind]: '' }))
     setCreating(kind)
     try {
@@ -412,9 +507,11 @@ function SettingsPage() {
       setChannels((current) => [channel, ...current])
       if (kind === 'feishu') setFeishu({ name: '', webhookUrl: '' })
       else setMail({ name: '', sender: '', authCode: '', recipient: '' })
-      setSuccess(`通知渠道“${channel.name}”已连接并加密保存`)
+      notify({ tone: 'success', title: '通知渠道连接成功', message: `“${channel.name}”已验证并加密保存。` })
     } catch (reason) {
-      setFormErrors((current) => ({ ...current, [kind]: reason instanceof Error ? reason.message : '通知渠道连接失败' }))
+      const message = reason instanceof Error ? reason.message : '通知渠道连接失败'
+      setFormErrors((current) => ({ ...current, [kind]: message }))
+      notify({ tone: 'error', title: '通知渠道连接失败', message })
     } finally {
       setCreating(null)
     }
@@ -422,13 +519,12 @@ function SettingsPage() {
 
   const testChannel = async (channel: NotificationChannel) => {
     if (testingID || deletingID) return
-    clearFeedback()
     setTestingID(channel.id)
     try {
       const result = await api.testNotificationChannel(channel.id)
-      setSuccess(`${channel.name}：${result.message}`)
+      notify({ tone: 'success', title: '测试通知发送成功', message: `${channel.name}：${result.message}` })
     } catch (reason) {
-      setActionError(reason instanceof Error ? reason.message : '测试通知发送失败')
+      notify({ tone: 'error', title: '测试通知发送失败', message: reason instanceof Error ? reason.message : '请检查渠道配置后重试。' })
     } finally {
       setTestingID('')
     }
@@ -436,15 +532,14 @@ function SettingsPage() {
 
   const deleteChannel = async (channel: NotificationChannel) => {
     if (testingID || deletingID) return
-    clearFeedback()
     setDeletingID(channel.id)
     try {
       await api.deleteNotificationChannel(channel.id)
       setChannels((current) => current.filter((item) => item.id !== channel.id))
       setConfirmDeleteID('')
-      setSuccess(`通知渠道“${channel.name}”已删除`)
+      notify({ tone: 'success', title: '通知渠道已删除', message: `“${channel.name}”已从本机移除。` })
     } catch (reason) {
-      setActionError(reason instanceof Error ? reason.message : '通知渠道删除失败')
+      notify({ tone: 'error', title: '通知渠道删除失败', message: reason instanceof Error ? reason.message : '请稍后重试。' })
     } finally {
       setDeletingID('')
     }
@@ -452,16 +547,17 @@ function SettingsPage() {
 
   const evaluateNow = async () => {
     if (scanning) return
-    clearFeedback()
     setScanError('')
     setScanResult(null)
     setScanning(true)
     try {
       const result = await api.evaluateNotifications()
       setScanResult(result)
-      setSuccess('告警与真实活动扫描已完成')
+      notify({ tone: 'success', title: '告警与活动扫描完成', message: `检查 ${result.checkedAccounts} 个账号，发现 ${result.availableActivities} 项可用活动。` })
     } catch (reason) {
-      setScanError(reason instanceof Error ? reason.message : '扫描失败，请稍后重试')
+      const message = reason instanceof Error ? reason.message : '扫描失败，请稍后重试'
+      setScanError(message)
+      notify({ tone: 'error', title: '告警与活动扫描失败', message })
     } finally {
       setScanning(false)
     }
@@ -477,11 +573,6 @@ function SettingsPage() {
       <button className="primary-button" onClick={() => void evaluateNow()} disabled={scanning} aria-describedby="notification-scan-note">{scanning ? <LoaderCircle className="spin" size={17} /> : <ScanSearch size={17} />}{scanning ? '正在扫描' : '立即扫描'}</button>
     </section>
 
-    <div className="settings-announcer" aria-live="polite">
-      {success ? <div className="settings-feedback success"><Check size={17} />{success}</div> : null}
-      {actionError ? <div className="settings-feedback error" role="alert"><AlertTriangle size={17} />{actionError}</div> : null}
-    </div>
-
     <div className="notification-layout">
       <div className="notification-main">
         <section className="settings-panel channel-panel" aria-labelledby="channel-list-title">
@@ -493,7 +584,7 @@ function SettingsPage() {
             return <article className="notification-channel" key={channel.id}>
               <span className={`channel-kind-icon ${channel.kind}`}>{channel.kind === 'feishu' ? <Bot size={20} /> : <Mail size={20} />}</span>
               <div className="channel-copy"><span>{channel.kind === 'feishu' ? '飞书机器人' : 'QQ 邮箱 SMTP'} · {channel.enabled ? '已启用' : '已停用'}</span><strong>{channel.name}</strong><small>{channel.target}</small><time>更新于 {formatDateTime(channel.updatedAt)}</time></div>
-              {confirming ? <div className="channel-delete-confirm" role="group" aria-label={`确认删除 ${channel.name}`}><strong>删除“{channel.name}”？</strong><span><button className="text-button" onClick={() => setConfirmDeleteID('')} disabled={deleting} autoFocus>取消</button><button className="danger-button" onClick={() => void deleteChannel(channel)} disabled={deleting}>{deleting ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}{deleting ? '删除中' : '确认删除'}</button></span></div> : <div className="channel-actions"><button className="secondary-button" onClick={() => void testChannel(channel)} disabled={channelBusy} aria-label={`测试 ${channel.name}`}>{testing ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}{testing ? '发送中' : '发送测试'}</button><button className="channel-delete-button" onClick={() => { clearFeedback(); setConfirmDeleteID(channel.id) }} disabled={channelBusy} aria-label={`删除 ${channel.name}`}><Trash2 size={17} /></button></div>}
+              {confirming ? <div className="channel-delete-confirm" role="group" aria-label={`确认删除 ${channel.name}`}><strong>删除“{channel.name}”？</strong><span><button className="text-button" onClick={() => setConfirmDeleteID('')} disabled={deleting} autoFocus>取消</button><button className="danger-button" onClick={() => void deleteChannel(channel)} disabled={deleting}>{deleting ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}{deleting ? '删除中' : '确认删除'}</button></span></div> : <div className="channel-actions"><button className="secondary-button" onClick={() => void testChannel(channel)} disabled={channelBusy} aria-label={`测试 ${channel.name}`}>{testing ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}{testing ? '发送中' : '发送测试'}</button><button className="channel-delete-button" onClick={() => setConfirmDeleteID(channel.id)} disabled={channelBusy} aria-label={`删除 ${channel.name}`}><Trash2 size={17} /></button></div>}
             </article>
           })}</div> : <div className="notification-empty"><Bell size={27} /><strong>还没有通知渠道</strong><span>在下方连接飞书机器人或 QQ 邮箱后，告警才会向外发送。</span></div>}
         </section>
@@ -546,6 +637,7 @@ function SettingsPage() {
 }
 
 function AccountDrawer({ account, onClose, onReload }: { account: AccountSummary; onClose: () => void; onReload: () => void }) {
+  const { notify } = useToast()
   const ref = useRef<HTMLElement>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
@@ -561,7 +653,21 @@ function AccountDrawer({ account, onClose, onReload }: { account: AccountSummary
     window.addEventListener('keydown', listener)
     return () => window.removeEventListener('keydown', listener)
   }, [deleteDialogOpen, onClose])
-  const refreshAccount = async () => { setRefreshing(true); setError(''); try { await api.refreshAccount(account.id); onReload(); onClose() } catch (reason) { setError(reason instanceof Error ? reason.message : '刷新失败'); setRefreshing(false) } }
+  const refreshAccount = async () => {
+    setRefreshing(true)
+    setError('')
+    try {
+      await api.refreshAccount(account.id)
+      notify({ tone: 'success', title: '账号额度刷新成功', message: `${account.alias} 的最新额度和重置时间已同步。` })
+      onReload()
+      onClose()
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : '刷新失败'
+      setError(message)
+      setRefreshing(false)
+      notify({ tone: 'error', title: '账号额度刷新失败', message })
+    }
+  }
   const openDeleteDialog = () => { setError(''); setDeleteError(''); setDeletePhase('confirming') }
   const closeDeleteDialog = () => { if (!deleting) { setDeleteError(''); setDeletePhase('idle') } }
   const deleteAccount = async () => {
@@ -570,11 +676,14 @@ function AccountDrawer({ account, onClose, onReload }: { account: AccountSummary
     setDeleteError('')
     try {
       await api.deleteAccount(account.id)
+      notify({ tone: 'success', title: '账号删除成功', message: `${account.email || account.alias} 的本机凭据、额度缓存和关联记录已清除。` })
       onClose()
       onReload()
     } catch (reason) {
-      setDeleteError(reason instanceof Error ? reason.message : '删除账号失败，请稍后重试')
+      const message = reason instanceof Error ? reason.message : '删除账号失败，请稍后重试'
+      setDeleteError(message)
       setDeletePhase('confirming')
+      notify({ tone: 'error', title: '账号删除失败', message })
     }
   }
   const isWorkBuddy = account.providerId === 'workbuddy-cn' || account.providerId === 'workbuddy-global'
@@ -628,3 +737,4 @@ function providerShortName(providerId: string) { return ({ codex: 'Codex', 'work
 function planLabel(value?: string) { if (!value) return '未标注'; return value.toLowerCase() === 'plus' ? 'Plus' : value.toLowerCase() === 'pro' ? 'Pro' : value }
 function capabilityLabel(value: string) { return ({ quota: '额度', usage: '用量', credits: '积分', balance: '余额', token_plan: 'Token Plan', checkin: '签到' } as Record<string, string>)[value] ?? value }
 function authMethodLabel(value?: string) { return ({ credential_import: '认证文件导入', device_code: '官方设备登录', oauth: '官方网页登录', oauth_qr: '官方二维码登录', api_key: 'API Key', access_key: 'RAM AccessKey', cookie: '控制台 Cookie', session_token: '网页登录态' } as Record<string, string>)[value ?? ''] ?? (value || '未记录') }
+function sameStringArray(left: readonly string[], right: readonly string[]) { return left.length === right.length && left.every((value, index) => value === right[index]) }

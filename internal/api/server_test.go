@@ -51,6 +51,40 @@ func TestOverviewEndpoint(t *testing.T) {
 	}
 }
 
+func TestAccountSyncStatusEndpoint(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "sync-status.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.EnsureProviderCatalog(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	hub := service.NewEventHub()
+	accounts := service.NewAccounts(store, mustVault(t), hub)
+	syncer := service.NewAccountSync(accounts, hub, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	dashboard := service.NewDashboard(store, hub, accounts, "test")
+	dashboard.SetAccountSync(syncer)
+	handler := api.New(api.Dependencies{
+		Dashboard: dashboard, Accounts: accounts, AccountSync: syncer, Events: hub,
+		Web: http.NotFoundHandler(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Version: "test",
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/sync/status", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", response.Code, response.Body.String())
+	}
+	var status domain.AccountSyncStatus
+	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Enabled || status.IntervalSeconds != 900 || status.ActivityMode != "verified_only" {
+		t.Fatalf("unexpected account sync status: %#v", status)
+	}
+}
+
 func TestDeleteAccountEndpointRemovesAccountFromOverviewAndActivities(t *testing.T) {
 	store, err := sqlite.Open(filepath.Join(t.TempDir(), "delete-api.db"))
 	if err != nil {

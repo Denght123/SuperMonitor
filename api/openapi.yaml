@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: SuperMonitor API
-  version: 0.7.0
+  version: 0.8.0
   description: Monitoring-only API. It intentionally exposes no model proxy endpoints.
 servers:
   - url: /api/v1
@@ -37,6 +37,18 @@ paths:
       responses:
         "202":
           description: Refresh completed for connected real accounts
+        "409":
+          description: A manual or scheduled account refresh is already running
+  /sync/status:
+    get:
+      operationId: getAccountSyncStatus
+      responses:
+        "200":
+          description: Browser-independent account refresh scheduler status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountSyncStatus"
   /providers/{providerID}/accounts/import:
     post:
       operationId: importProviderCredential
@@ -349,6 +361,25 @@ paths:
           description: Server-sent event stream
 components:
   schemas:
+    AccountSyncStatus:
+      type: object
+      required: [enabled, intervalSeconds, timeoutSeconds, startupDelaySeconds, running, lastResult, activityMode]
+      properties:
+        enabled: { type: boolean }
+        intervalSeconds: { type: integer, format: int64 }
+        timeoutSeconds: { type: integer, format: int64 }
+        startupDelaySeconds: { type: integer, format: int64 }
+        running: { type: boolean }
+        currentTrigger: { type: string }
+        currentRunStartedAt: { type: string, format: date-time }
+        lastRunStartedAt: { type: string, format: date-time }
+        lastCompletedAt: { type: string, format: date-time }
+        nextScheduledAt: { type: string, format: date-time }
+        lastResult: { type: string, enum: [never, success, partial, failed] }
+        lastError: { type: string }
+        lastActivityProbeAt: { type: string, format: date-time }
+        lastActivityProbeError: { type: string }
+        activityMode: { type: string, enum: [verified_only] }
     NotificationChannel:
       type: object
       required: [id, kind, name, target, enabled, createdAt, updatedAt]

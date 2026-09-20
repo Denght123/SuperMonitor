@@ -25,6 +25,7 @@ type dashboardService interface {
 type Dependencies struct {
 	Dashboard     *service.Dashboard
 	Accounts      *service.Accounts
+	AccountSync   *service.AccountSync
 	Notifications *service.Notifications
 	Events        *service.EventHub
 	Web           http.Handler
@@ -63,10 +64,21 @@ func New(deps Dependencies) http.Handler {
 		})
 		api.Post("/refresh", func(w http.ResponseWriter, r *http.Request) {
 			if err := deps.Dashboard.Refresh(r.Context()); err != nil {
+				if errors.Is(err, service.ErrAccountSyncBusy) {
+					writeError(w, http.StatusConflict, "refresh_busy", "账号同步正在执行，请稍后再试")
+					return
+				}
 				writeError(w, http.StatusInternalServerError, "refresh_failed", "刷新任务执行失败")
 				return
 			}
 			writeJSON(w, http.StatusAccepted, map[string]any{"status": "completed", "message": "全部额度已刷新"})
+		})
+		api.Get("/sync/status", func(w http.ResponseWriter, _ *http.Request) {
+			if deps.AccountSync == nil {
+				writeError(w, http.StatusServiceUnavailable, "sync_unavailable", "后台账号同步服务未启用")
+				return
+			}
+			writeJSON(w, http.StatusOK, deps.AccountSync.Status())
 		})
 		api.Post("/providers/{providerID}/accounts/import", func(w http.ResponseWriter, r *http.Request) {
 			if deps.Accounts == nil {

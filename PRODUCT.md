@@ -36,13 +36,13 @@ SuperMonitor unifies provider-native quota shapes without flattening unlike unit
 - Pure server deployment; no local helper and no automatic scanning of a user's computer.
 - Official APIs are preferred. Undocumented community integrations require explicit opt-in, visible risk labeling, and a per-adapter kill switch.
 - Credits, currency balances, token plans, and rate-limit windows retain their native units. Only comparable, trustworthy usage may be aggregated.
-- Usage inferred from quota snapshots is labeled estimated and is never used to fabricate model distribution.
-- Auto check-in is supported where available but is disabled by default.
+- Usage inferred from quota snapshots is never used to fabricate model distribution. Only provider-returned Token counters and model identifiers enter usage charts.
+- Automatic activities run only through verified provider adapters; unsupported platforms remain absent from the activity center.
 - Built-in administrator authentication, optional TOTP, generic OIDC, and trusted reverse-proxy authentication are required.
 - Credentials are encrypted using a deployment master key and never returned to the frontend.
 - Simplified Chinese and English, system/light/dark themes, and full mobile operation are required.
 - Raw quota snapshots retain 90 days, usage and activity detail retain 180 days, and daily aggregates retain indefinitely by default.
-- Default alerts: warning at 20% remaining, critical at 10%, expiry/reset reminders within 24 hours, and alerts after two consecutive refresh failures or a failed check-in.
+- Default alerts: one low-quota reminder at 15% remaining or below, reset reminders within three days and one day, and actionable alerts for failed verified activities.
 
 ## Brand Commitments
 

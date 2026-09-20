@@ -2,6 +2,30 @@
 
 All notable changes to SuperMonitor are documented here.
 
+## [0.8.0] - 2026-09-20
+
+### Added
+
+- Browser-independent account synchronization every 15 minutes, with randomized startup delay, a three-minute run timeout, serialized execution, manual-refresh deferral, and `GET /api/v1/sync/status` diagnostics.
+- Automatic verified-activity discovery after every account refresh; supported activities run automatically, while unknown platforms remain absent instead of receiving speculative entries.
+- A unified accessible Toast system for account imports, OAuth connections, notification-channel setup and tests, refreshes, activity execution, provider ordering, and account deletion. Success notifications dismiss automatically and can be closed manually.
+- User-controlled provider ordering shared by the overview and account pool, persisted in local browser storage with accessible move controls.
+- Account/provider/model-attributed usage storage with idempotent absolute daily updates, cumulative snapshot baselines, positive-delta recording, counter-reset handling, and account-deletion cascade.
+- TokenRhythm's official 30-day history backfill and daily usage panel, including input/output/cache Tokens, request counts, and real per-model aggregates without retaining prompt or preview content.
+
+### Changed
+
+- Token and request KPIs, daily trends, and model share now read only from verified persisted usage. Credits, balances, rate-window percentages, and unattributed Token totals cannot create a fake model distribution.
+- Refresh-all now updates account quotas and then probes the verified activity registry through the same serialized server-side coordinator.
+- The previous permanent server-event banner was replaced by temporary operation feedback; background SSE updates remain quiet and refresh the displayed data in place.
+- WorkBuddy, Codex, balance providers, and Token plans continue to retain their native units while usage history remains a separate measurement path.
+
+### Fixed
+
+- Account-deletion success messages no longer remain visible after navigation.
+- The model chart no longer claims a hard-coded 30-day range when it represents retained, provider-attributed history.
+- Repeated usage snapshots and repeated official daily reads no longer double count Token totals.
+
 ## [0.7.0] - 2026-09-20
 
 ### Added

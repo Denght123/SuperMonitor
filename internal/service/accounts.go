@@ -60,6 +60,8 @@ type Accounts struct {
 
 var ErrAccountNotFound = errors.New("账号不存在")
 
+const tokenRhythmBackfillSource = "tokenrhythm-30d-v1"
+
 type kiroLoginMeta struct {
 	SessionID string
 	Alias     string
@@ -987,7 +989,87 @@ func (s *Accounts) connectTokenRhythmWithID(ctx context.Context, id, alias strin
 	signal := domain.QuotaSignal{ID: "tokenrhythm-live-balance", Provider: "基元律动 TokenRhythm", Label: "可用余额", Kind: "balance", Value: usage.AvailableBalance, Unit: "CNY", ExpiresAt: usage.ExpiresAt, Status: "healthy", Source: "TokenRhythm /api/usage-summary", Confidence: "live"}
 	now := time.Now().UTC().Truncate(time.Second)
 	account := newConnected(id, "tokenrhythm", alias, "", "钱包余额", "session_token", "TokenRhythm 官方站点接口", []domain.QuotaSignal{signal}, now)
-	return s.persist(ctx, account, credential, "基元律动")
+	summary, err := s.persist(ctx, account, credential, "基元律动")
+	if err != nil {
+		return domain.AccountSummary{}, err
+	}
+	s.syncTokenRhythmUsage(ctx, id, credential, now)
+	return summary, nil
+}
+
+func (s *Accounts) syncTokenRhythmUsage(ctx context.Context, accountID string, credential tokenrhythm.Credential, now time.Time) {
+	var syncErrors []error
+	backfilled, err := s.store.UsageBackfillCompleted(ctx, accountID, "tokenrhythm", tokenRhythmBackfillSource)
+	if err != nil {
+		syncErrors = append(syncErrors, fmt.Errorf("读取历史回填状态: %w", err))
+	} else if !backfilled {
+		history, historyErr := s.tokenrhythm.FetchUsageHistory(ctx, credential, "30d")
+		if historyErr != nil {
+			syncErrors = append(syncErrors, fmt.Errorf("读取 30 天官方用量: %w", historyErr))
+		} else {
+			storedAll := true
+			for _, day := range history {
+				if storeErr := s.store.UpsertAbsoluteDailyUsage(ctx, day.Date, accountID, "tokenrhythm", tokenRhythmUsageReadings(day)); storeErr != nil {
+					syncErrors = append(syncErrors, fmt.Errorf("保存 %s 用量: %w", day.Date, storeErr))
+					storedAll = false
+					break
+				}
+			}
+			if storedAll {
+				if markErr := s.store.MarkUsageBackfillCompleted(ctx, accountID, "tokenrhythm", tokenRhythmBackfillSource, now); markErr != nil {
+					syncErrors = append(syncErrors, fmt.Errorf("保存历史回填状态: %w", markErr))
+				}
+			}
+		}
+	}
+
+	today, todayErr := s.tokenrhythm.FetchTodayUsage(ctx, credential)
+	if todayErr != nil {
+		syncErrors = append(syncErrors, fmt.Errorf("读取今日官方用量: %w", todayErr))
+	} else if storeErr := s.store.UpsertAbsoluteDailyUsage(ctx, today.Date, accountID, "tokenrhythm", tokenRhythmUsageReadings(today)); storeErr != nil {
+		syncErrors = append(syncErrors, fmt.Errorf("保存今日用量: %w", storeErr))
+	}
+
+	if len(syncErrors) > 0 {
+		s.events.Publish(Event{Type: "usage.sync_failed", Message: "基元律动余额已更新，但部分 Token 用量同步失败", Timestamp: now})
+	}
+}
+
+func tokenRhythmUsageReadings(panel tokenrhythm.UsagePanel) []domain.UsageModelReading {
+	total := domain.UsageCounters{
+		InputTokens: panel.InputTokens, OutputTokens: panel.OutputTokens,
+		CacheTokens: panel.CacheReadTokens + panel.CacheWriteTokens, Requests: panel.Calls,
+	}
+	readings := make([]domain.UsageModelReading, 0, len(panel.Models)+1)
+	attributed := domain.UsageCounters{}
+	for _, model := range panel.Models {
+		counters := domain.UsageCounters{
+			InputTokens: model.InputTokens, OutputTokens: model.OutputTokens,
+			CacheTokens: model.CacheReadTokens + model.CacheWriteTokens, Requests: model.Calls,
+		}
+		readings = append(readings, domain.UsageModelReading{Model: model.Model, Counters: counters})
+		attributed.InputTokens += counters.InputTokens
+		attributed.OutputTokens += counters.OutputTokens
+		attributed.CacheTokens += counters.CacheTokens
+		attributed.Requests += counters.Requests
+	}
+	remaining := domain.UsageCounters{
+		InputTokens:  positiveDifference(total.InputTokens, attributed.InputTokens),
+		OutputTokens: positiveDifference(total.OutputTokens, attributed.OutputTokens),
+		CacheTokens:  positiveDifference(total.CacheTokens, attributed.CacheTokens),
+		Requests:     positiveDifference(total.Requests, attributed.Requests),
+	}
+	if remaining != (domain.UsageCounters{}) {
+		readings = append(readings, domain.UsageModelReading{Counters: remaining})
+	}
+	return readings
+}
+
+func positiveDifference(total, attributed int64) int64 {
+	if total <= attributed {
+		return 0
+	}
+	return total - attributed
 }
 
 func (s *Accounts) connectWorkBuddyWithID(ctx context.Context, id, providerID, alias, authMethod string, credential workbuddy.Credential) (domain.AccountSummary, error) {
@@ -1072,7 +1154,7 @@ func newConnected(id, providerID, alias, email, plan, authMethod, source string,
 			status = "warning"
 		}
 	}
-	return domain.ConnectedAccount{ID: id, ProviderID: providerID, ProviderName: name, Region: region, Alias: alias, Email: email, Plan: plan, AuthMethod: authMethod, Status: status, Source: source, LastRefreshedAt: now, NextRefreshAt: now.Add(10 * time.Minute), QuotaWindows: windows}
+	return domain.ConnectedAccount{ID: id, ProviderID: providerID, ProviderName: name, Region: region, Alias: alias, Email: email, Plan: plan, AuthMethod: authMethod, Status: status, Source: source, LastRefreshedAt: now, NextRefreshAt: now.Add(DefaultAccountSyncInterval), QuotaWindows: windows}
 }
 
 func codexWindows(usage codex.Usage) []domain.QuotaSignal {

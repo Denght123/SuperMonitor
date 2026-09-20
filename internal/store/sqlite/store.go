@@ -189,7 +189,9 @@ func (s *Store) CleanupSyntheticData(ctx context.Context) error {
 }
 
 func (s *Store) DailyUsage(ctx context.Context) ([]domain.DailyUsage, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT usage_date, input_tokens, output_tokens, cache_tokens, requests FROM usage_daily ORDER BY usage_date")
+	rows, err := s.db.QueryContext(ctx, `SELECT usage_date, SUM(input_tokens), SUM(output_tokens),
+		SUM(cache_tokens), SUM(requests) FROM usage_daily_attributed
+		GROUP BY usage_date ORDER BY usage_date`)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +208,9 @@ func (s *Store) DailyUsage(ctx context.Context) ([]domain.DailyUsage, error) {
 }
 
 func (s *Store) ModelUsage(ctx context.Context) ([]domain.ModelUsage, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT model, tokens, color FROM model_usage ORDER BY tokens DESC")
+	rows, err := s.db.QueryContext(ctx, `SELECT model, SUM(input_tokens + output_tokens + cache_tokens) AS tokens
+		FROM usage_daily_attributed WHERE model <> '' GROUP BY model
+		HAVING tokens > 0 ORDER BY tokens DESC, model`)
 	if err != nil {
 		return nil, err
 	}
@@ -214,9 +218,10 @@ func (s *Store) ModelUsage(ctx context.Context) ([]domain.ModelUsage, error) {
 	var result []domain.ModelUsage
 	for rows.Next() {
 		var item domain.ModelUsage
-		if err := rows.Scan(&item.Model, &item.Tokens, &item.Color); err != nil {
+		if err := rows.Scan(&item.Model, &item.Tokens); err != nil {
 			return nil, err
 		}
+		item.Color = usageModelColor(item.Model)
 		result = append(result, item)
 	}
 	return result, rows.Err()
@@ -487,6 +492,9 @@ func (s *Store) DeleteConnectedAccount(ctx context.Context, id string) (domain.C
 		"DELETE FROM notification_deliveries WHERE dedupe_key IN (SELECT dedupe_key FROM notification_events WHERE account_id=?)",
 		"DELETE FROM notification_states WHERE account_id=?",
 		"DELETE FROM notification_events WHERE account_id=?",
+		"DELETE FROM usage_backfill_states WHERE account_id=?",
+		"DELETE FROM usage_daily_attributed WHERE account_id=?",
+		"DELETE FROM usage_cumulative_snapshots WHERE account_id=?",
 		"DELETE FROM account_quota_windows WHERE account_id=?",
 		"DELETE FROM account_credentials WHERE account_id=?",
 		"DELETE FROM connected_accounts WHERE id=?",

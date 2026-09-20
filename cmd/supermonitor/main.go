@@ -58,11 +58,15 @@ func main() {
 
 	hub := service.NewEventHub()
 	accounts := service.NewAccounts(store, vault, hub)
+	accountSync := service.NewAccountSync(accounts, hub, logger)
 	dashboard := service.NewDashboard(store, hub, accounts, cfg.Environment)
+	dashboard.SetAccountSync(accountSync)
 	notifications := service.NewNotifications(store, vault, accounts, hub, logger)
+	accountSync.SetActivityScanner(notifications)
 	handler := api.New(api.Dependencies{
 		Dashboard:     dashboard,
 		Accounts:      accounts,
+		AccountSync:   accountSync,
 		Notifications: notifications,
 		Events:        hub,
 		Web:           webui.Handler(),
@@ -71,6 +75,7 @@ func main() {
 	})
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()
+	go accountSync.RunScheduler(schedulerCtx)
 	go notifications.RunScheduler(schedulerCtx)
 
 	server := &http.Server{

@@ -14,6 +14,27 @@ type Overview struct {
 	Alerts       []Alert          `json:"alerts"`
 }
 
+// AccountSyncStatus describes the server-side account refresh scheduler. It is
+// intentionally independent from browser sessions so deployments can expose
+// when the next background refresh will run.
+type AccountSyncStatus struct {
+	Enabled                bool       `json:"enabled"`
+	IntervalSeconds        int64      `json:"intervalSeconds"`
+	TimeoutSeconds         int64      `json:"timeoutSeconds"`
+	StartupDelaySeconds    int64      `json:"startupDelaySeconds"`
+	Running                bool       `json:"running"`
+	CurrentTrigger         string     `json:"currentTrigger,omitempty"`
+	CurrentRunStartedAt    *time.Time `json:"currentRunStartedAt,omitempty"`
+	LastRunStartedAt       *time.Time `json:"lastRunStartedAt,omitempty"`
+	LastCompletedAt        *time.Time `json:"lastCompletedAt,omitempty"`
+	NextScheduledAt        *time.Time `json:"nextScheduledAt,omitempty"`
+	LastResult             string     `json:"lastResult"`
+	LastError              string     `json:"lastError,omitempty"`
+	LastActivityProbeAt    *time.Time `json:"lastActivityProbeAt,omitempty"`
+	LastActivityProbeError string     `json:"lastActivityProbeError,omitempty"`
+	ActivityMode           string     `json:"activityMode"`
+}
+
 type KPI struct {
 	ID    string  `json:"id"`
 	Label string  `json:"label"`

@@ -52,3 +52,41 @@ func TestListActivitiesSurfacesPerAccountCredentialFailure(t *testing.T) {
 		t.Fatalf("unexpected activity error card: %#v", activity)
 	}
 }
+
+func TestListActivitiesDoesNotInventUnverifiedProviderActivities(t *testing.T) {
+	root := t.TempDir()
+	store, err := sqlite.Open(filepath.Join(root, "unverified-activities.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.EnsureProviderCatalog(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	vault, err := secure.OpenVault(filepath.Join(root, "credential.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := vault.Encrypt([]byte(`{"apiKey":"test-only"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	account := domain.ConnectedAccount{
+		ID: "zhipu-without-verified-activity", ProviderID: "zhipu", ProviderName: "智谱 AI",
+		Alias: "普通 API 账号", AuthMethod: "api_key", Status: "healthy", Source: "test",
+		LastRefreshedAt: now, NextRefreshAt: now.Add(DefaultAccountSyncInterval),
+	}
+	if err := store.SaveConnectedAccount(context.Background(), account, encrypted); err != nil {
+		t.Fatal(err)
+	}
+
+	accounts := NewAccounts(store, vault, NewEventHub())
+	activities, listErr := accounts.ListActivities(context.Background())
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(activities) != 0 {
+		t.Fatalf("unverified provider activity must not be invented: %#v", activities)
+	}
+}

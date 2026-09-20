@@ -13,11 +13,16 @@ type Dashboard struct {
 	store       *sqlite.Store
 	events      *EventHub
 	accounts    *Accounts
+	accountSync *AccountSync
 	environment string
 }
 
 func NewDashboard(store *sqlite.Store, events *EventHub, accounts *Accounts, environment string) *Dashboard {
 	return &Dashboard{store: store, events: events, accounts: accounts, environment: environment}
+}
+
+func (s *Dashboard) SetAccountSync(accountSync *AccountSync) {
+	s.accountSync = accountSync
 }
 
 func (s *Dashboard) Overview(ctx context.Context) (domain.Overview, error) {
@@ -85,7 +90,11 @@ func (s *Dashboard) Providers(ctx context.Context) ([]domain.Provider, error) {
 
 func (s *Dashboard) Refresh(ctx context.Context) error {
 	now := time.Now().UTC().Truncate(time.Second)
-	if s.accounts != nil {
+	if s.accountSync != nil {
+		if err := s.accountSync.Refresh(ctx, "manual"); err != nil {
+			return err
+		}
+	} else if s.accounts != nil {
 		if err := s.accounts.RefreshAll(ctx); err != nil {
 			return err
 		}
@@ -93,6 +102,8 @@ func (s *Dashboard) Refresh(ctx context.Context) error {
 	if err := s.store.TouchRefresh(ctx, now); err != nil {
 		return fmt.Errorf("refresh accounts: %w", err)
 	}
-	s.events.Publish(Event{Type: "refresh.completed", Message: "全部账号额度已刷新", Timestamp: now})
+	if s.accountSync == nil {
+		s.events.Publish(Event{Type: "refresh.completed", Message: "全部账号额度已刷新", Timestamp: now})
+	}
 	return nil
 }

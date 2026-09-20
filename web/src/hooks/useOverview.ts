@@ -7,7 +7,6 @@ type State = {
   refreshing: boolean
   error: string | null
   streamStatus: 'connecting' | 'live' | 'offline'
-  lastEvent: string | null
 }
 
 export function useOverview() {
@@ -17,7 +16,6 @@ export function useOverview() {
     refreshing: false,
     error: null,
     streamStatus: 'connecting',
-    lastEvent: null,
   })
   const mounted = useRef(true)
 
@@ -44,13 +42,15 @@ export function useOverview() {
   const refresh = useCallback(async () => {
     setState((current) => ({ ...current, refreshing: true, error: null }))
     try {
-      await api.refresh()
+      const result = await api.refresh()
       await load(true)
+      return result
     } catch (error) {
       setState((current) => ({
         ...current,
         error: error instanceof Error ? error.message : '刷新失败',
       }))
+      throw error
     } finally {
       if (mounted.current) {
         setState((current) => ({ ...current, refreshing: false }))
@@ -64,11 +64,7 @@ export function useOverview() {
     const stream = new EventSource('/api/v1/events')
     stream.onopen = () => setState((current) => ({ ...current, streamStatus: 'live' }))
     stream.onerror = () => setState((current) => ({ ...current, streamStatus: 'offline' }))
-    stream.addEventListener('update', (event) => {
-      const payload = JSON.parse((event as MessageEvent<string>).data) as { message?: string }
-      setState((current) => ({ ...current, lastEvent: payload.message ?? '数据已更新' }))
-      void load(true)
-    })
+    stream.addEventListener('update', () => void load(true))
     return () => {
       mounted.current = false
       stream.close()
