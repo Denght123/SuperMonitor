@@ -71,7 +71,7 @@ func (s *Dashboard) Overview(ctx context.Context) (domain.Overview, error) {
 		Environment: s.environment,
 		Connection:  "live",
 		KPIs: []domain.KPI{
-			{ID: "tokens", Label: "真实 Token", Value: float64(tokens), Unit: "tokens", Tone: "cyan"},
+			{ID: "tokens", Label: "已验证 Token", Value: float64(tokens), Unit: "tokens", Tone: "cyan"},
 			{ID: "requests", Label: "请求数", Value: float64(requests), Unit: "requests", Tone: "blue"},
 			{ID: "accounts", Label: "活跃账号", Value: float64(sqlite.ActiveAccounts(accounts)), Unit: "accounts", Tone: "neutral"},
 			{ID: "alerts", Label: "严重告警", Value: float64(sqlite.CriticalCount(alerts)), Unit: "alerts", Tone: "critical"},

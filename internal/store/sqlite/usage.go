@@ -14,6 +14,8 @@ import (
 
 var ErrUsageSnapshotOutOfOrder = errors.New("usage snapshot is not newer than the stored baseline")
 
+const maxImportedUsageCounter int64 = 1_000_000_000_000_000
+
 // RecordUsageSnapshot stores a verified cumulative provider reading and adds
 // only its positive delta to the daily aggregate. The first observation is a
 // baseline and intentionally contributes no usage. If any cumulative counter
@@ -230,6 +232,138 @@ func (s *Store) UpsertAbsoluteDailyUsage(ctx context.Context, date, accountID, p
 		}
 	}
 	return tx.Commit()
+}
+
+// ReplaceCodexUsageSources updates source-scoped Codex rollout aggregates and
+// rebuilds the account's attributed daily usage atomically. A stable source ID
+// plus content hash makes repeated folder imports idempotent while allowing a
+// still-growing rollout file to replace its older aggregate.
+func (s *Store) ReplaceCodexUsageSources(ctx context.Context, accountID string, sources []domain.CodexUsageImportSource) (domain.CodexUsageImportResult, error) {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return domain.CodexUsageImportResult{}, fmt.Errorf("Codex usage account ID is required")
+	}
+	if len(sources) == 0 || len(sources) > 500 {
+		return domain.CodexUsageImportResult{}, fmt.Errorf("Codex usage import must contain 1 to 500 sources")
+	}
+	for index := range sources {
+		if err := validateCodexUsageSource(&sources[index]); err != nil {
+			return domain.CodexUsageImportResult{}, fmt.Errorf("Codex usage source %d: %w", index, err)
+		}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.CodexUsageImportResult{}, err
+	}
+	defer tx.Rollback()
+	var providerID string
+	if err := tx.QueryRowContext(ctx, "SELECT provider_id FROM connected_accounts WHERE id=?", accountID).Scan(&providerID); err != nil {
+		return domain.CodexUsageImportResult{}, err
+	}
+	if providerID != "codex" {
+		return domain.CodexUsageImportResult{}, fmt.Errorf("usage logs can only be imported into a Codex account")
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	result := domain.CodexUsageImportResult{}
+	for _, source := range sources {
+		var existingHash string
+		err := tx.QueryRowContext(ctx, `SELECT content_hash FROM codex_usage_import_sources
+			WHERE account_id=? AND source_id=?`, accountID, source.SourceID).Scan(&existingHash)
+		if err == nil && existingHash == source.ContentHash {
+			result.UnchangedSources++
+			continue
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return domain.CodexUsageImportResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO codex_usage_import_sources
+			(account_id, source_id, content_hash, imported_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT(account_id, source_id) DO UPDATE SET
+			content_hash=excluded.content_hash, imported_at=excluded.imported_at`,
+			accountID, source.SourceID, source.ContentHash, now); err != nil {
+			return domain.CodexUsageImportResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM codex_usage_import_entries
+			WHERE account_id=? AND source_id=?`, accountID, source.SourceID); err != nil {
+			return domain.CodexUsageImportResult{}, err
+		}
+		for _, entry := range source.Entries {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO codex_usage_import_entries
+				(account_id, source_id, usage_date, model, input_tokens, output_tokens, cache_tokens, requests)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, accountID, source.SourceID, entry.Date, entry.Model,
+				entry.Counters.InputTokens, entry.Counters.OutputTokens, entry.Counters.CacheTokens,
+				entry.Counters.Requests); err != nil {
+				return domain.CodexUsageImportResult{}, err
+			}
+			result.ImportedEntries++
+			result.ImportedTokens += entry.Counters.InputTokens + entry.Counters.OutputTokens + entry.Counters.CacheTokens
+		}
+		result.ImportedSources++
+	}
+
+	if result.ImportedSources > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM usage_daily_attributed
+			WHERE account_id=? AND provider_id='codex'`, accountID); err != nil {
+			return domain.CodexUsageImportResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_daily_attributed
+			(usage_date, account_id, provider_id, model, input_tokens, output_tokens, cache_tokens, requests)
+			SELECT usage_date, account_id, 'codex', model,
+				SUM(input_tokens), SUM(output_tokens), SUM(cache_tokens), SUM(requests)
+			FROM codex_usage_import_entries WHERE account_id=?
+			GROUP BY usage_date, account_id, model`, accountID); err != nil {
+			return domain.CodexUsageImportResult{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.CodexUsageImportResult{}, err
+	}
+	return result, nil
+}
+
+func validateCodexUsageSource(source *domain.CodexUsageImportSource) error {
+	source.SourceID = strings.TrimSpace(source.SourceID)
+	source.ContentHash = strings.TrimSpace(source.ContentHash)
+	if source.SourceID == "" || len(source.SourceID) > 160 {
+		return fmt.Errorf("source ID is missing or too long")
+	}
+	if source.ContentHash == "" || len(source.ContentHash) > 160 {
+		return fmt.Errorf("content hash is missing or too long")
+	}
+	if len(source.Entries) == 0 || len(source.Entries) > 1000 {
+		return fmt.Errorf("source must contain 1 to 1000 daily model entries")
+	}
+	seen := make(map[string]struct{}, len(source.Entries))
+	for index := range source.Entries {
+		entry := &source.Entries[index]
+		entry.Date = strings.TrimSpace(entry.Date)
+		entry.Model = strings.TrimSpace(entry.Model)
+		parsed, err := time.Parse("2006-01-02", entry.Date)
+		if err != nil || parsed.Format("2006-01-02") != entry.Date {
+			return fmt.Errorf("entry %d has an invalid date", index)
+		}
+		if entry.Model == "" || len(entry.Model) > 200 {
+			return fmt.Errorf("entry %d has a missing or invalid model", index)
+		}
+		if err := validateUsageCounters(entry.Counters); err != nil {
+			return fmt.Errorf("entry %d: %w", index, err)
+		}
+		if entry.Counters == (domain.UsageCounters{}) {
+			return fmt.Errorf("entry %d contains no usage", index)
+		}
+		if entry.Counters.InputTokens > maxImportedUsageCounter || entry.Counters.OutputTokens > maxImportedUsageCounter ||
+			entry.Counters.CacheTokens > maxImportedUsageCounter || entry.Counters.Requests > maxImportedUsageCounter {
+			return fmt.Errorf("entry %d exceeds the supported counter range", index)
+		}
+		key := entry.Date + "\x00" + entry.Model
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("entry %d duplicates date and model", index)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
 }
 
 func validateUsageSnapshot(snapshot domain.UsageSnapshot) error {

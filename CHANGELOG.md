@@ -2,6 +2,24 @@
 
 All notable changes to SuperMonitor are documented here.
 
+## [0.10.0] - 2026-09-21
+
+### Added
+
+- Privacy-preserving Codex local-usage import from `.codex/sessions` rollout JSONL files. Parsing happens in the browser and only date, model, Token counters, request count, a stable source ID, and an aggregate hash are sent to the server; prompts and responses never leave the browser.
+- Source-scoped, idempotent Codex usage storage. Re-importing unchanged sessions is a no-op, while a growing rollout replaces its previous aggregate without double counting.
+- Codex account controls for selecting the full sessions folder or individual rollout files, with explicit success, unchanged-file, and skipped-record feedback.
+
+### Changed
+
+- Token and model panels now explain that Codex quota windows and Codex Token usage are separate data sources. The quota endpoint is no longer implied to provide model history.
+- The Token KPI is labelled “已验证 Token”; model share explicitly includes only provider-returned or locally parsed real model identifiers.
+
+### Fixed
+
+- Codex models such as `gpt-5.6-sol` can now appear in model distribution and Token history after importing the local session folder, without enabling an API proxy.
+- Cached Codex input Tokens are separated from uncached input before aggregation, preventing cached Tokens from being counted twice.
+
 ## [0.9.0] - 2026-09-21
 
 ### Added

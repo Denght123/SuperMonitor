@@ -19,6 +19,7 @@ import { useToast } from './hooks/useToast'
 import { providerShortName } from './lib/providerNames'
 import { moveProviderInOrder, normalizeProviderOrder, readProviderOrder, sortProviderEntries, writeProviderOrder, type ProviderOrderDirection } from './lib/providerOrder'
 import { useAuthentication } from './hooks/useAuthentication'
+import { parseCodexUsageFiles } from './lib/codexUsageImport'
 
 type Page = 'overview' | 'accounts' | 'usage' | 'activities' | 'alerts' | 'settings'
 type Theme = 'light' | 'dark' | 'system'
@@ -121,7 +122,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.9.0</small></div>
+        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.10.0</small></div>
       </aside>
 
       <main className="main-stage">
@@ -189,7 +190,7 @@ function TokenChart({ data }: { data: Overview }) {
   </div>
 
   return <section className="instrument-panel token-panel">
-    <div className="panel-header token-chart-header"><div><h2>Token 轨迹</h2><p>输入、输出、缓存与请求量 · {usageRangeDescription(range, visibleData.length)}</p></div>{rangeControl}</div>
+    <div className="panel-header token-chart-header"><div><h2>Token 轨迹</h2><p>仅统计平台返回或本地日志解析的真实计数 · {usageRangeDescription(range, visibleData.length)}</p></div>{rangeControl}</div>
     {visibleData.length ? <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={visibleData} margin={{ top: 10, right: 6, left: -8, bottom: 0 }}><CartesianGrid stroke="var(--chart-grid)" vertical={false} /><XAxis dataKey="date" tickFormatter={(value: string) => showYear ? value.slice(0, 7).replace('-', '/') : value.slice(5)} tick={{ fill: 'var(--text-muted)', fontSize: 13 }} axisLine={false} tickLine={false} minTickGap={range === '7d' ? 12 : range === '30d' ? 26 : 48} /><YAxis yAxisId="tokens" tickFormatter={compactNumber} tick={{ fill: 'var(--text-muted)', fontSize: 13 }} axisLine={false} tickLine={false} /><YAxis yAxisId="requests" hide orientation="right" /><Tooltip content={<TokenTooltip />} /><Bar yAxisId="tokens" dataKey="cacheTokens" stackId="tokens" fill="var(--chart-cache)" /><Bar yAxisId="tokens" dataKey="inputTokens" stackId="tokens" fill="var(--chart-input)" /><Bar yAxisId="tokens" dataKey="outputTokens" stackId="tokens" fill="var(--chart-output)" radius={[4, 4, 0, 0]} /><Line yAxisId="requests" dataKey="requests" stroke="var(--chart-line)" strokeWidth={2} dot={false} /></ComposedChart></ResponsiveContainer></div> : <EmptyState title={data.tokenTrend.length ? '此时间段暂无 Token 用量' : '暂无 Token 用量'} detail={data.tokenTrend.length ? '切换到更长的时间范围，或等待新的用量记录写入。' : '平台返回可验证的 Token 用量后会生成趋势图。'} />}
   </section>
 }
@@ -201,8 +202,8 @@ function TokenTooltip({ active, payload, label }: { active?: boolean; payload?: 
 
 function ModelDonut({ data }: { data: Overview }) {
   const total = data.modelUsage.reduce((sum, item) => sum + item.tokens, 0)
-  if (!data.modelUsage.length || total <= 0) return <section className="instrument-panel model-panel"><div className="panel-header"><div><h2>模型用量分布</h2><p>仅统计带模型字段的 Token</p></div></div><EmptyState title="暂无模型分布" detail="真实模型用量写入后会自动生成占比。" /></section>
-  return <section className="instrument-panel model-panel"><div className="panel-header"><div><h2>模型用量分布</h2><p>仅统计平台返回真实模型字段的 Token</p></div></div><div className="donut-wrap"><ResponsiveContainer width="100%" height={220}><PieChart><Pie data={data.modelUsage} dataKey="tokens" nameKey="model" innerRadius={65} outerRadius={92} paddingAngle={2} stroke="none">{data.modelUsage.map((entry) => <Cell key={entry.model} fill={entry.color} />)}</Pie><Tooltip formatter={(value) => compactNumber(Number(value))} /></PieChart></ResponsiveContainer><div className="donut-total"><span>自接入起</span><strong>{compactNumber(total)}</strong><small>tokens</small></div></div><div className="model-list">{data.modelUsage.map((item) => <div key={item.model}><i style={{ background: item.color }} /><span>{item.model}</span><b>{((item.tokens / total) * 100).toFixed(1)}%</b></div>)}</div></section>
+  if (!data.modelUsage.length || total <= 0) return <section className="instrument-panel model-panel"><div className="panel-header"><div><h2>模型用量分布</h2><p>仅统计有真实模型归属的 Token</p></div></div><EmptyState title="暂无模型分布" detail="平台返回模型字段，或导入 Codex 本地会话用量后，会自动生成占比。" /></section>
+  return <section className="instrument-panel model-panel"><div className="panel-header"><div><h2>模型用量分布</h2><p>来自平台字段或本地会话日志，不按额度百分比推算</p></div></div><div className="donut-wrap"><ResponsiveContainer width="100%" height={220}><PieChart><Pie data={data.modelUsage} dataKey="tokens" nameKey="model" innerRadius={65} outerRadius={92} paddingAngle={2} stroke="none">{data.modelUsage.map((entry) => <Cell key={entry.model} fill={entry.color} />)}</Pie><Tooltip formatter={(value) => compactNumber(Number(value))} /></PieChart></ResponsiveContainer><div className="donut-total"><span>自接入起</span><strong>{compactNumber(total)}</strong><small>tokens</small></div></div><div className="model-list">{data.modelUsage.map((item) => <div key={item.model}><i style={{ background: item.color }} /><span>{item.model}</span><b>{((item.tokens / total) * 100).toFixed(1)}%</b></div>)}</div></section>
 }
 
 function QuotaProgress({ signal }: { signal: QuotaSignal }) {
@@ -417,7 +418,14 @@ function secretConfig(providerId: string) {
   return copies[providerId] ?? { title: '认证信息', detail: '用于读取真实额度。', placeholder: '', action: '验证并连接', emptyError: '请输入认证信息' }
 }
 
-function UsagePage({ data }: { data: Overview }) { return <><KPIBand data={data} /><div className="chart-deck"><TokenChart data={data} /><ModelDonut data={data} /></div></> }
+function UsagePage({ data }: { data: Overview }) {
+  const hasCodex = data.accounts.some((account) => account.providerId === 'codex')
+  return <>
+    <KPIBand data={data} />
+    {hasCodex ? <section className="usage-truth-note"><ShieldCheck size={20} /><div><strong>Codex 额度与 Token 用量来自不同数据源</strong><p>OpenAI 的额度接口只返回限额百分比，不返回模型与 Token。要让真实的 gpt-5.6-sol 等模型进入下方统计，请在对应 Codex 账号详情中导入本机 <code>.codex/sessions</code> 文件夹；对话正文只在浏览器本地读取，不会上传。</p></div></section> : null}
+    <div className="chart-deck"><TokenChart data={data} /><ModelDonut data={data} /></div>
+  </>
+}
 function ActivitiesPage({ onReload }: { onReload: () => void }) {
   const { notify } = useToast()
   const [items, setItems] = useState<ActivityItem[]>([])
@@ -648,9 +656,16 @@ function AccountDrawer({ account, onClose, onReload }: { account: AccountSummary
   const [error, setError] = useState('')
   const [deletePhase, setDeletePhase] = useState<'idle' | 'confirming' | 'deleting'>('idle')
   const [deleteError, setDeleteError] = useState('')
+  const [importingUsage, setImportingUsage] = useState(false)
+  const usageFilesRef = useRef<HTMLInputElement>(null)
+  const usageFolderRef = useRef<HTMLInputElement>(null)
   const deleteDialogOpen = deletePhase !== 'idle'
   const deleting = deletePhase === 'deleting'
   useEffect(() => { ref.current?.focus() }, [])
+  useEffect(() => {
+    usageFolderRef.current?.setAttribute('webkitdirectory', '')
+    usageFolderRef.current?.setAttribute('directory', '')
+  }, [])
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !deleteDialogOpen) onClose()
@@ -691,6 +706,35 @@ function AccountDrawer({ account, onClose, onReload }: { account: AccountSummary
       notify({ tone: 'error', title: '账号删除失败', message })
     }
   }
+  const importCodexUsage = async (files: FileList | null) => {
+    if (!files?.length || importingUsage) return
+    setImportingUsage(true)
+    setError('')
+    try {
+      const parsed = await parseCodexUsageFiles([...files])
+      if (!parsed.sources.length) throw new Error('所选内容中没有可识别且带真实模型字段的 Codex Token 记录')
+      const result = { importedSources: 0, unchangedSources: 0, importedEntries: 0, importedTokens: 0 }
+      for (let offset = 0; offset < parsed.sources.length; offset += 100) {
+        const batch = await api.importCodexUsage(account.id, parsed.sources.slice(offset, offset + 100))
+        result.importedSources += batch.importedSources
+        result.unchangedSources += batch.unchangedSources
+        result.importedEntries += batch.importedEntries
+        result.importedTokens += batch.importedTokens
+      }
+      const unchanged = result.unchangedSources ? `，${result.unchangedSources} 个文件未变化` : ''
+      const skipped = parsed.skippedFiles || parsed.skippedEvents ? `；跳过 ${parsed.skippedFiles} 个无用文件、${parsed.skippedEvents} 条缺少模型或日期的记录` : ''
+      notify({ tone: 'success', title: 'Codex 真实用量导入成功', message: `更新 ${result.importedSources} 个会话文件，写入 ${compactNumber(result.importedTokens)} tokens${unchanged}${skipped}。` })
+      onReload()
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Codex 用量导入失败'
+      setError(message)
+      notify({ tone: 'error', title: 'Codex 用量导入失败', message })
+    } finally {
+      setImportingUsage(false)
+      if (usageFilesRef.current) usageFilesRef.current.value = ''
+      if (usageFolderRef.current) usageFolderRef.current.value = ''
+    }
+  }
   const isWorkBuddy = account.providerId === 'workbuddy-cn' || account.providerId === 'workbuddy-global'
   const mainSignals = isWorkBuddy ? account.quotaWindows.slice(0, 1) : account.quotaWindows
   const packageSignals = isWorkBuddy ? account.quotaWindows.slice(1) : []
@@ -704,10 +748,11 @@ function AccountDrawer({ account, onClose, onReload }: { account: AccountSummary
           <div className="detail-row"><span>最近刷新</span><strong>{formatDateTime(account.lastRefreshedAt)}</strong></div>
           <div className="drawer-quotas">{mainSignals.length ? mainSignals.map((signal) => <QuotaProgress key={signal.id} signal={signal} />) : <EmptyState title={account.primaryMetric} detail={account.secondaryMetric} />}</div>
           {packageSignals.length ? <details className="package-details"><summary><span>官方积分包明细</span><b>{packageSignals.length} 个</b></summary><p>这些积分包来自官方 Billing 返回，金额已计入上方总积分，不会再次累加。</p><div>{packageSignals.map((signal) => <div className="package-row" key={signal.id}><span><strong>{signal.label}</strong><small>{signal.expiresAt ? `${formatCompactDate(signal.expiresAt)} 到期` : '未返回到期时间'}</small></span><b>{quotaValue(signal.value, signal.unit)}</b></div>)}</div></details> : null}
+          {account.providerId === 'codex' ? <section className="codex-usage-import"><div><Upload size={19} /><span><strong>导入真实模型与 Token 用量</strong><small>额度接口不提供模型明细。选择本机 <code>.codex/sessions</code> 文件夹或 rollout JSONL；浏览器只上传日期、模型和计数聚合，不上传对话正文。</small></span></div><div className="codex-usage-actions"><button className="secondary-button" type="button" onClick={() => usageFolderRef.current?.click()} disabled={importingUsage}>{importingUsage ? <LoaderCircle className="spin" size={16} /> : <Boxes size={16} />}选择 sessions 文件夹</button><button className="secondary-button" type="button" onClick={() => usageFilesRef.current?.click()} disabled={importingUsage}><FileJson size={16} />选择 JSONL 文件</button></div><input ref={usageFolderRef} className="visually-hidden" type="file" multiple accept=".jsonl,application/x-ndjson" onChange={(event) => void importCodexUsage(event.target.files)} /><input ref={usageFilesRef} className="visually-hidden" type="file" multiple accept=".jsonl,application/x-ndjson" onChange={(event) => void importCodexUsage(event.target.files)} /></section> : null}
           {error ? <div className="form-error"><AlertTriangle size={17} />{error}</div> : null}
         </div>
         <footer className="drawer-footer">
-          <button className="primary-button" onClick={() => void refreshAccount()} disabled={refreshing || deleting}>{refreshing ? <LoaderCircle className="spin" size={18} /> : <RefreshCw size={18} />}立即读取真实额度</button>
+          <button className="primary-button" onClick={() => void refreshAccount()} disabled={refreshing || deleting || importingUsage}>{refreshing ? <LoaderCircle className="spin" size={18} /> : <RefreshCw size={18} />}立即读取真实额度</button>
           {!account.synthetic ? <div className="danger-zone"><span><strong>删除本机账号</strong><small>清除认证凭据和额度记录，不会注销平台账号。</small></span><button className="danger-button" onClick={openDeleteDialog} disabled={refreshing || deleting}><Trash2 size={17} />删除账号</button></div> : null}
         </footer>
       </aside>

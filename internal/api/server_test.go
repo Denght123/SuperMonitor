@@ -221,6 +221,46 @@ func TestNotificationChannelAPIEncryptsAndNeverReturnsWebhook(t *testing.T) {
 	}
 }
 
+func TestCodexUsageImportAddsRealModelToOverview(t *testing.T) {
+	store, err := sqlite.Open(filepath.Join(t.TempDir(), "codex-usage-api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.EnsureProviderCatalog(ctx); err != nil {
+		t.Fatal(err)
+	}
+	account := domain.ConnectedAccount{
+		ID: "codex-sol", ProviderID: "codex", Alias: "Codex Sol", AuthMethod: "device_code",
+		Status: "healthy", Source: "test", LastRefreshedAt: time.Now().UTC(), NextRefreshAt: time.Now().UTC().Add(time.Minute),
+	}
+	if err := store.SaveConnectedAccount(ctx, account, []byte("encrypted-credential")); err != nil {
+		t.Fatal(err)
+	}
+	hub := service.NewEventHub()
+	accounts := service.NewAccounts(store, mustVault(t), hub)
+	handler := api.New(api.Dependencies{
+		Dashboard: service.NewDashboard(store, hub, accounts, "test"), Accounts: accounts, Events: hub,
+		Web: http.NotFoundHandler(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Version: "test",
+	})
+	payload := `{"sources":[{"sourceId":"session-sol","contentHash":"hash-v1","entries":[{"date":"2026-09-21","model":"gpt-5.6-sol","counters":{"inputTokens":700,"outputTokens":200,"cacheTokens":300,"requests":1}}]}]}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/"+account.ID+"/usage/codex-import", strings.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"importedTokens":1200`) {
+		t.Fatalf("unexpected import response: %d %s", response.Code, response.Body.String())
+	}
+
+	overviewRequest := httptest.NewRequest(http.MethodGet, "/api/v1/overview", nil)
+	overviewResponse := httptest.NewRecorder()
+	handler.ServeHTTP(overviewResponse, overviewRequest)
+	if overviewResponse.Code != http.StatusOK || !strings.Contains(overviewResponse.Body.String(), `"model":"gpt-5.6-sol"`) {
+		t.Fatalf("Codex model usage missing from overview: %d %s", overviewResponse.Code, overviewResponse.Body.String())
+	}
+}
+
 func mustVault(t *testing.T) *secure.Vault {
 	t.Helper()
 	vault, err := secure.OpenVault(filepath.Join(t.TempDir(), "credential.key"))

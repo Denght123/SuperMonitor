@@ -13,7 +13,7 @@
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-24%2B-5FA04E?logo=nodedotjs&logoColor=white">
 </p>
 
-> 当前版本：**v0.9.0**。SuperMonitor 只负责监控与提醒，不代理模型请求，不做 API 转发、账号轮换或请求路由。
+> 当前版本：**v0.10.0**。SuperMonitor 只负责监控与提醒，不代理模型请求，不做 API 转发、账号轮换或请求路由。
 
 ![SuperMonitor 监控总览](docs/images/overview.png)
 
@@ -41,7 +41,7 @@ AI 编程工具的计费口径并不统一：有的平台返回百分比额度�
 - **多平台账号池**：同一平台可添加多个账号，单独刷新、删除并调整平台展示顺序。
 - **真实原生数据**：百分比、Credits、人民币余额、Token 与重置时间分别展示，不用模拟数据填充缺失字段。
 - **后台自动同步**：服务端默认每 15 分钟低频刷新，即使浏览器关闭也会继续运行。
-- **用量分析**：按 7 天、30 天、一年或全部历史查看 Token 趋势与模型使用占比。
+- **用量分析**：按 7 天、30 天、一年或全部历史查看 Token 趋势与模型使用占比；Codex 支持在浏览器本地解析会话日志，正文不会上传。
 - **活动中心**：只展示已验证的真实活动；当前支持 WorkBuddy 国内版每日签到。
 - **额度告警**：支持飞书自定义机器人与 QQ 邮箱 SMTP，覆盖低额度和重置时间提醒。
 - **本地凭据保险箱**：敏感凭据由 AES-GCM 加密，上传的认证文件只在内存中解析，不作为文件保存。
@@ -89,7 +89,7 @@ Codex 使用剩余百分比与重置时间，WorkBuddy 使用 Credits，基元�
 | 基元律动 TokenRhythm | 国内 | `sess_` Session Token、`tr_session` Cookie | 人民币余额、到期时间、Token/请求/模型统计 |
 | DeepSeek | 国内 | API Key | 官方账户余额 |
 | 智谱 AI | 国内 | API Key | Coding Plan 额度或开放平台人民币余额 |
-| Codex | 国际 | OpenAI 设备验证码、原生/CPA/Sub2API 认证 JSON | 5 小时与周额度、套餐、重置时间 |
+| Codex | 国际 | OpenAI 设备验证码、原生/CPA/Sub2API 认证 JSON；本地 sessions 日志导入 | 5 小时与周额度、套餐、重置时间、真实模型/Token 用量 |
 | Gemini CLI | 国际 | `oauth_creds.json` | Code Assist 模型额度与用量 |
 | Claude Code | 国际 | `.credentials.json` | 5 小时、周额度及模型专属窗口 |
 | Qoder 国际版 | 国际 | 官方设备授权、认证文件 | 基础积分、赠送积分、额度与到期时间 |
@@ -142,7 +142,7 @@ docker compose logs -f --tail=200 supermonitor
 ### 方式二：直接运行 Docker 容器
 
 ```bash
-docker build --build-arg VERSION=v0.9.0 -t supermonitor:v0.9.0 .
+docker build --build-arg VERSION=v0.10.0 -t supermonitor:v0.10.0 .
 docker volume create supermonitor-data
 docker run -d \
   --name supermonitor \
@@ -151,7 +151,7 @@ docker run -d \
   -e SUPMON_ADMIN_PASSWORD='替换为至少12个字符的强密码' \
   -e SUPMON_DATA_DIR=/app/data \
   -v supermonitor-data:/app/data \
-  supermonitor:v0.9.0
+  supermonitor:v0.10.0
 ```
 
 ### 方式三：从源码构建
@@ -169,7 +169,7 @@ npm run build
 cd ..
 
 go test ./...
-go build -trimpath -ldflags "-s -w -X main.version=v0.9.0" -o bin/supermonitor ./cmd/supermonitor
+go build -trimpath -ldflags "-s -w -X main.version=v0.10.0" -o bin/supermonitor ./cmd/supermonitor
 
 SUPMON_LISTEN=127.0.0.1:8080 \
 SUPMON_DATA_DIR=./data \
@@ -196,6 +196,19 @@ $env:SUPMON_ADMIN_PASSWORD = Read-Host "管理密码（至少 12 个字符）" -
 6. 如需外部提醒，在“设置”连接飞书机器人或 QQ 邮箱 SMTP，并先发送测试消息。
 
 同一平台可以添加多个账号。账号卡片支持独立刷新与删除，平台分组可调整顺序；删除操作会同时移除该账号的加密凭据、额度缓存、用量记录、活动与告警状态。
+
+### Codex 模型与 Token 用量
+
+Codex 的 `/backend-api/wham/usage` 只返回套餐和额度窗口，不提供具体模型或绝对 Token。仅完成 OAuth 或认证文件导入时，SuperMonitor 因此不会把额度百分比伪造成 Token 数据。
+
+如需显示 `gpt-5.6-sol` 等真实模型用量：
+
+1. 打开对应 Codex 账号详情。
+2. 点击“选择 sessions 文件夹”。
+3. 选择本机的 Codex 会话目录：Windows 通常为 `%USERPROFILE%\.codex\sessions`，Linux/macOS 通常为 `~/.codex/sessions`。
+4. 浏览器会读取 rollout JSONL 中的模型与 `token_count`，随后只上传日期、模型和计数聚合。
+
+对话正文、工具参数和响应内容不会发送到 SuperMonitor 后端。导入以会话为单位幂等处理：相同文件重复导入不会累加，仍在增长的会话再次导入时会替换旧聚合。
 
 ## 生产环境反向代理
 

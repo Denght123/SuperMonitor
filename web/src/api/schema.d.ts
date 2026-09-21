@@ -278,6 +278,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/accounts/{accountID}/usage/codex-import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Stores privacy-preserving model and token aggregates extracted locally in the browser from Codex rollout JSONL files. Conversation content is never submitted. */
+        post: operations["importCodexUsage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/accounts/{accountID}": {
         parameters: {
             query?: never;
@@ -544,6 +561,34 @@ export interface components {
             /** Format: int64 */
             tokens: number;
             color: string;
+        };
+        UsageCounters: {
+            /** Format: int64 */
+            inputTokens: number;
+            /** Format: int64 */
+            outputTokens: number;
+            /** Format: int64 */
+            cacheTokens: number;
+            /** Format: int64 */
+            requests: number;
+        };
+        CodexUsageImportEntry: {
+            /** Format: date */
+            date: string;
+            model: string;
+            counters: components["schemas"]["UsageCounters"];
+        };
+        CodexUsageImportSource: {
+            sourceId: string;
+            contentHash: string;
+            entries: components["schemas"]["CodexUsageImportEntry"][];
+        };
+        CodexUsageImportResult: {
+            importedSources: number;
+            unchangedSources: number;
+            importedEntries: number;
+            /** Format: int64 */
+            importedTokens: number;
         };
         QuotaSignal: {
             id: string;
@@ -1112,6 +1157,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountSummary"];
+                };
+            };
+        };
+    };
+    importCodexUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    sources: components["schemas"]["CodexUsageImportSource"][];
+                };
+            };
+        };
+        responses: {
+            /** @description Codex local usage aggregates imported idempotently */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodexUsageImportResult"];
                 };
             };
         };

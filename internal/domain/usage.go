@@ -53,3 +53,25 @@ type AttributedDailyUsage struct {
 	CacheTokens  int64  `json:"cacheTokens"`
 	Requests     int64  `json:"requests"`
 }
+
+// CodexUsageImportSource contains privacy-preserving aggregates extracted in
+// the browser from one Codex rollout JSONL file. Conversation content never
+// crosses the API boundary.
+type CodexUsageImportSource struct {
+	SourceID    string                  `json:"sourceId"`
+	ContentHash string                  `json:"contentHash"`
+	Entries     []CodexUsageImportEntry `json:"entries"`
+}
+
+type CodexUsageImportEntry struct {
+	Date     string        `json:"date"`
+	Model    string        `json:"model"`
+	Counters UsageCounters `json:"counters"`
+}
+
+type CodexUsageImportResult struct {
+	ImportedSources  int   `json:"importedSources"`
+	UnchangedSources int   `json:"unchangedSources"`
+	ImportedEntries  int   `json:"importedEntries"`
+	ImportedTokens   int64 `json:"importedTokens"`
+}

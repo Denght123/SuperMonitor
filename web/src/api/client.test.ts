@@ -53,3 +53,19 @@ describe('notification API', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/notifications/channels/channel%2F1', expect.objectContaining({ method: 'DELETE' }))
   })
 })
+
+describe('Codex usage import API', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('submits only extracted aggregate fields', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ importedSources: 1, unchangedSources: 0, importedEntries: 1, importedTokens: 1200 }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    await api.importCodexUsage('codex/account', [{
+      sourceId: 'session-sol', contentHash: 'hash-v1',
+      entries: [{ date: '2026-09-21', model: 'gpt-5.6-sol', counters: { inputTokens: 700, outputTokens: 200, cacheTokens: 300, requests: 1 } }],
+    }])
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/accounts/codex%2Faccount/usage/codex-import', expect.objectContaining({
+      method: 'POST',
+      body: expect.not.stringContaining('prompt'),
+    }))
+  })
+})

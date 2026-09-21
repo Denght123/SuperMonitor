@@ -201,7 +201,7 @@ func TestDeleteConnectedAccountCascadesUsageHistory(t *testing.T) {
 	if _, err := store.DeleteConnectedAccount(ctx, "usage-delete"); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"usage_daily_attributed", "usage_cumulative_snapshots", "usage_backfill_states"} {
+	for _, table := range []string{"usage_daily_attributed", "usage_cumulative_snapshots", "usage_backfill_states", "codex_usage_import_sources", "codex_usage_import_entries"} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE account_id=?", "usage-delete").Scan(&count); err != nil {
 			t.Fatal(err)
@@ -234,6 +234,65 @@ func TestUsageBackfillStateIsVersionedAndIdempotent(t *testing.T) {
 	completed, err = store.UsageBackfillCompleted(ctx, "usage-backfill", "tokenrhythm", "tokenrhythm-30d-v2")
 	if err != nil || completed {
 		t.Fatalf("v2 must remain independently pending: completed=%v err=%v", completed, err)
+	}
+}
+
+func TestReplaceCodexUsageSourcesIsIdempotentAndUpdatesGrowingRollout(t *testing.T) {
+	store := openUsageTestStore(t)
+	ctx := context.Background()
+	saveUsageTestAccount(t, store, "codex-usage", "codex")
+	source := domain.CodexUsageImportSource{
+		SourceID: "session-sol", ContentHash: "hash-v1",
+		Entries: []domain.CodexUsageImportEntry{{
+			Date: "2026-09-21", Model: "gpt-5.6-sol",
+			Counters: domain.UsageCounters{InputTokens: 700, OutputTokens: 200, CacheTokens: 300, Requests: 1},
+		}},
+	}
+	first, err := store.ReplaceCodexUsageSources(ctx, "codex-usage", []domain.CodexUsageImportSource{source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ImportedSources != 1 || first.UnchangedSources != 0 || first.ImportedTokens != 1200 {
+		t.Fatalf("unexpected first import: %+v", first)
+	}
+	duplicate, err := store.ReplaceCodexUsageSources(ctx, "codex-usage", []domain.CodexUsageImportSource{source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.ImportedSources != 0 || duplicate.UnchangedSources != 1 {
+		t.Fatalf("duplicate import must be a no-op: %+v", duplicate)
+	}
+	source.ContentHash = "hash-v2"
+	source.Entries[0].Counters.OutputTokens = 260
+	updated, err := store.ReplaceCodexUsageSources(ctx, "codex-usage", []domain.CodexUsageImportSource{source})
+	if err != nil || updated.ImportedSources != 1 {
+		t.Fatalf("growing rollout update failed: result=%+v err=%v", updated, err)
+	}
+	models, err := store.ModelUsage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || models[0].Model != "gpt-5.6-sol" || models[0].Tokens != 1260 {
+		t.Fatalf("unexpected Codex model usage: %+v", models)
+	}
+	usage, err := store.DailyUsage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usage) != 1 || usage[0].InputTokens != 700 || usage[0].OutputTokens != 260 || usage[0].CacheTokens != 300 || usage[0].Requests != 1 {
+		t.Fatalf("unexpected Codex daily usage: %+v", usage)
+	}
+}
+
+func TestReplaceCodexUsageSourcesRejectsAnotherProvider(t *testing.T) {
+	store := openUsageTestStore(t)
+	saveUsageTestAccount(t, store, "not-codex", "tokenrhythm")
+	_, err := store.ReplaceCodexUsageSources(context.Background(), "not-codex", []domain.CodexUsageImportSource{{
+		SourceID: "session", ContentHash: "hash",
+		Entries: []domain.CodexUsageImportEntry{{Date: "2026-09-21", Model: "gpt-5.6-sol", Counters: domain.UsageCounters{InputTokens: 1}}},
+	}})
+	if err == nil {
+		t.Fatal("expected non-Codex account import to be rejected")
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Denght123/SuperMonitor/internal/domain"
 	"github.com/Denght123/SuperMonitor/internal/integration/genericquota"
 	"github.com/Denght123/SuperMonitor/internal/service"
 	"github.com/go-chi/chi/v5"
@@ -313,6 +314,27 @@ func New(deps Dependencies) http.Handler {
 				return
 			}
 			writeJSON(w, http.StatusOK, session)
+		})
+		api.Post("/accounts/{accountID}/usage/codex-import", func(w http.ResponseWriter, r *http.Request) {
+			if deps.Accounts == nil {
+				writeError(w, http.StatusServiceUnavailable, "accounts_unavailable", "账号服务未启用")
+				return
+			}
+			var payload struct {
+				Sources []domain.CodexUsageImportSource `json:"sources"`
+			}
+			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024*1024))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&payload); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_usage_import", "Codex 用量聚合无效或超过 8 MB")
+				return
+			}
+			result, err := deps.Accounts.ImportCodexUsage(r.Context(), chi.URLParam(r, "accountID"), payload.Sources)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "codex_usage_import_failed", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, result)
 		})
 		api.Post("/accounts/{accountID}/refresh", func(w http.ResponseWriter, r *http.Request) {
 			if deps.Accounts == nil {

@@ -902,6 +902,18 @@ func (s *Accounts) connectCodexWithID(ctx context.Context, id, alias, authMethod
 	return s.persist(ctx, account, credential, "Codex")
 }
 
+func (s *Accounts) ImportCodexUsage(ctx context.Context, accountID string, sources []domain.CodexUsageImportSource) (domain.CodexUsageImportResult, error) {
+	s.accountOps.RLock()
+	defer s.accountOps.RUnlock()
+	result, err := s.store.ReplaceCodexUsageSources(ctx, accountID, sources)
+	if err != nil {
+		return domain.CodexUsageImportResult{}, err
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	s.events.Publish(Event{Type: "usage.imported", Message: "Codex 本地模型与 Token 用量已更新", Timestamp: now})
+	return result, nil
+}
+
 func (s *Accounts) connectDeepSeekWithID(ctx context.Context, id, alias string, credential deepseek.Credential) (domain.AccountSummary, error) {
 	balance, err := s.deepseek.FetchBalance(ctx, credential)
 	if err != nil {

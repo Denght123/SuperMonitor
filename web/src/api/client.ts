@@ -36,6 +36,23 @@ export type NotificationEvaluation = {
   completedActivities: number
 }
 
+export type CodexUsageImportSource = {
+  sourceId: string
+  contentHash: string
+  entries: Array<{
+    date: string
+    model: string
+    counters: { inputTokens: number; outputTokens: number; cacheTokens: number; requests: number }
+  }>
+}
+
+export type CodexUsageImportResult = {
+  importedSources: number
+  unchangedSources: number
+  importedEntries: number
+  importedTokens: number
+}
+
 export type NotificationChannelInput =
   | { kind: 'feishu'; name: string; webhookUrl: string }
   | { kind: 'qq_mail'; name: string; sender: string; authCode: string; recipient: string }
@@ -121,6 +138,11 @@ export const api = {
   }),
   providerOAuthStatus: (providerId: string, id: string) => request<DeviceLoginSession>(`/providers/${encodeURIComponent(providerId)}/oauth/${encodeURIComponent(id)}`),
   refreshAccount: (id: string) => request<AccountSummary>(`/accounts/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
+  importCodexUsage: (id: string, sources: CodexUsageImportSource[]) => request<CodexUsageImportResult>(`/accounts/${encodeURIComponent(id)}/usage/codex-import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sources }),
+  }),
   deleteAccount: (id: string) => request<void>(`/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   notificationChannels: () => request<{ items: NotificationChannel[] }>('/notifications/channels'),
   notificationPolicy: () => request<NotificationPolicy>('/notifications/policy'),
