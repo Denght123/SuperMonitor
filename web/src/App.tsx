@@ -92,7 +92,7 @@ export function App() {
   const logout = async () => {
     try {
       await authentication.logout()
-      notify({ tone: 'info', title: '已退出管理会话', message: '再次进入控制台时需要重新验证管理员令牌。' })
+      notify({ tone: 'info', title: '已退出管理会话', message: '再次进入控制台时需要重新输入管理密码。' })
     } catch (reason) {
       notify({ tone: 'error', title: '退出失败', message: reason instanceof Error ? reason.message : '请稍后重试。' })
     }
@@ -121,7 +121,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.8.1</small></div>
+        <div className="sidebar-foot"><ShieldCheck size={18} /><span>凭据本机加密</span><small>v0.9.0</small></div>
       </aside>
 
       <main className="main-stage">

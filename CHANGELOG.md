@@ -2,6 +2,20 @@
 
 All notable changes to SuperMonitor are documented here.
 
+## [0.9.0] - 2026-09-21
+
+### Added
+
+- CPA-style connection login with an editable SuperMonitor address and a user-defined management password.
+- Safe cross-instance navigation: the browser posts the password directly to the selected instance, never places it in a URL, and never saves it to local or session storage.
+- Optional 30-day HttpOnly browser sessions for trusted personal devices, with explicit logout and the existing login-failure throttling.
+- `SUPMON_ADMIN_PASSWORD` as the primary deployment setting, with backward-compatible support for `SUPMON_ADMIN_TOKEN` during upgrades.
+
+### Changed
+
+- Administrator authentication copy, API payloads, Docker configuration, and deployment guidance now consistently use management-password terminology.
+- Browser sessions use SameSite=Lax so a successful top-level connection from another trusted SuperMonitor address can complete reliably; state-changing requests still require an exact same-origin check.
+
 ## [0.8.1] - 2026-09-21
 
 ### Added

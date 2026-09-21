@@ -13,7 +13,7 @@
 }
 
 .auth-shell { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: var(--bg); }
-.auth-console { width: min(440px, 100%); overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: 15px; }
+.auth-console { width: min(480px, 100%); overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: 15px; }
 .auth-brand { min-height: 66px; display: flex; align-items: center; gap: 11px; padding: 0 20px; border-bottom: 1px solid var(--line); }
 .auth-brand > span { width: 38px; height: 38px; display: grid; place-items: center; color: var(--accent-strong); background: var(--accent-soft); border-radius: 10px; }
 .auth-brand strong { font-size: 16px; letter-spacing: -.015em; }
@@ -34,8 +34,16 @@
 .auth-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
 .auth-input input { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--text); background: transparent; font: inherit; font-size: 16px; }
 .auth-input input::placeholder { color: var(--text-muted); }
+.auth-reveal { width: 32px; height: 32px; display: grid; flex: 0 0 auto; place-items: center; padding: 0; color: var(--text-muted); background: transparent; border: 0; border-radius: 7px; cursor: pointer; transition: color .16s ease, background .16s ease; }
+.auth-reveal:hover { color: var(--text); background: var(--surface-raised); }
+.auth-reveal:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .auth-hint { margin: -7px 0 0; color: var(--text-muted); font-size: 11px; }
 .auth-hint.ready { color: var(--healthy); }
+.auth-remember { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: flex-start; gap: 10px; margin: 0 !important; padding: 11px 12px; color: var(--text) !important; background: var(--surface-soft); border-radius: 9px; cursor: pointer; }
+.auth-remember input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent-strong); }
+.auth-remember span { min-width: 0; display: grid; gap: 2px; }
+.auth-remember strong { font-size: 12.5px; line-height: 1.35; }
+.auth-remember small { color: var(--text-muted); font-size: 11px; font-weight: 400; line-height: 1.45; }
 .auth-error { margin: -2px 0 0; padding: 9px 11px; color: var(--critical); background: var(--critical-soft); border-radius: 9px; font-size: 12px; }
 .auth-form > .primary-button { width: 100%; min-height: 42px; }
 :root[data-theme="dark"] {

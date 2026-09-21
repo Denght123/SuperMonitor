@@ -3,8 +3,8 @@ services:
     build:
       context: .
       args:
-        VERSION: ${SUPMON_VERSION:-v0.8.1}
-    image: ghcr.io/denght123/supermonitor:${SUPMON_VERSION:-v0.8.1}
+        VERSION: ${SUPMON_VERSION:-v0.9.0}
+    image: ghcr.io/denght123/supermonitor:${SUPMON_VERSION:-v0.9.0}
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
@@ -13,8 +13,8 @@ services:
       SUPMON_DATA_DIR: /app/data
       SUPMON_ENVIRONMENT: docker
       SUPMON_SYNC_TIMEOUT: ${SUPMON_SYNC_TIMEOUT:-10m}
-      SUPMON_ADMIN_TOKEN: ${SUPMON_ADMIN_TOKEN:-}
-      SUPMON_ALLOW_INSECURE_REMOTE: "true"
+      SUPMON_ADMIN_PASSWORD: ${SUPMON_ADMIN_PASSWORD:-}
+      SUPMON_ALLOW_INSECURE_REMOTE: ${SUPMON_ALLOW_INSECURE_REMOTE:-false}
       SUPMON_PROXY_URL: ${SUPMON_PROXY_URL:-}
       SUPMON_LOG_FILE: ${SUPMON_LOG_FILE:-}
     volumes:

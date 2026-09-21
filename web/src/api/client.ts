@@ -88,10 +88,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   authStatus: () => request<{ required: boolean; authenticated: boolean }>('/auth/status'),
-  login: (token: string) => request<{ authenticated: boolean }>('/auth/session', {
+  login: (password: string, remember = true) => request<{ authenticated: boolean }>('/auth/session', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token }),
+    body: JSON.stringify({ password, remember }),
   }),
   logout: () => request<{ authenticated: boolean }>('/auth/session', { method: 'DELETE' }),
   overview: () => request<Overview>('/overview'),

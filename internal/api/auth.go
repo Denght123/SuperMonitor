@@ -19,6 +19,7 @@ import (
 const (
 	adminSessionCookie     = "supermonitor_admin"
 	adminSessionTTL        = 12 * time.Hour
+	persistentSessionTTL   = 30 * 24 * time.Hour
 	loginFailureWindow     = 5 * time.Minute
 	loginLockoutDuration   = 5 * time.Minute
 	loginMaxFailures       = 5
@@ -47,8 +48,8 @@ type loginFailureState struct {
 }
 
 type adminAuth struct {
-	required    bool
-	tokenDigest [sha256.Size]byte
+	required       bool
+	passwordDigest [sha256.Size]byte
 
 	mu            sync.Mutex
 	sessions      map[[sha256.Size]byte]adminSession
@@ -57,17 +58,17 @@ type adminAuth struct {
 	random        io.Reader
 }
 
-func newAdminAuth(token string) *adminAuth {
-	token = strings.TrimSpace(token)
+func newAdminAuth(password string) *adminAuth {
+	password = strings.TrimSpace(password)
 	auth := &adminAuth{
-		required:      token != "",
+		required:      password != "",
 		sessions:      make(map[[sha256.Size]byte]adminSession),
 		loginFailures: make(map[string]loginFailureState),
 		now:           time.Now,
 		random:        rand.Reader,
 	}
 	if auth.required {
-		auth.tokenDigest = sha256.Sum256([]byte(token))
+		auth.passwordDigest = sha256.Sum256([]byte(password))
 	}
 	return auth
 }
@@ -85,7 +86,7 @@ func (a *adminAuth) middleware(next http.Handler) http.Handler {
 		case authenticationOriginRejected:
 			writeError(w, http.StatusForbidden, "invalid_request_origin", "Cookie 会话仅允许来自当前控制台的同源写入请求")
 		default:
-			writeError(w, http.StatusUnauthorized, "authentication_required", "需要管理员令牌才能访问此控制台")
+			writeError(w, http.StatusUnauthorized, "authentication_required", "需要管理密码才能访问此控制台")
 		}
 	})
 }
@@ -98,6 +99,9 @@ func (a *adminAuth) requiresAuthentication(r *http.Request) bool {
 		return false
 	}
 	if r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/session" {
+		return false
+	}
+	if r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/connect" {
 		return false
 	}
 	// The Kiro authorization server cannot send a SameSite=Strict session cookie
@@ -135,7 +139,7 @@ func (a *adminAuth) validBearer(header string) bool {
 		return false
 	}
 	digest := sha256.Sum256([]byte(strings.TrimSpace(token)))
-	return subtle.ConstantTimeCompare(digest[:], a.tokenDigest[:]) == 1
+	return subtle.ConstantTimeCompare(digest[:], a.passwordDigest[:]) == 1
 }
 
 func (a *adminAuth) validSession(value string) bool {
@@ -178,27 +182,37 @@ func (a *adminAuth) login(w http.ResponseWriter, r *http.Request) {
 	source := loginSource(r)
 	if allowed, retryAfter := a.loginAllowed(source); !allowed {
 		w.Header().Set("Retry-After", strconv.FormatInt(retryAfterSeconds(retryAfter), 10))
-		writeError(w, http.StatusTooManyRequests, "login_rate_limited", "管理员令牌连续验证失败次数过多，请稍后再试")
+		writeError(w, http.StatusTooManyRequests, "login_rate_limited", "管理密码连续验证失败次数过多，请稍后再试")
 		return
 	}
 
 	var payload struct {
-		Token string `json:"token"`
+		Password string `json:"password"`
+		Token    string `json:"token"`
+		Remember bool   `json:"remember"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024))
 	if err := decoder.Decode(&payload); err != nil {
 		a.recordLoginFailure(source)
-		writeError(w, http.StatusBadRequest, "invalid_payload", "请输入管理员令牌")
+		writeError(w, http.StatusBadRequest, "invalid_payload", "请输入管理密码")
 		return
 	}
-	digest := sha256.Sum256([]byte(strings.TrimSpace(payload.Token)))
-	if subtle.ConstantTimeCompare(digest[:], a.tokenDigest[:]) != 1 {
+	password := strings.TrimSpace(payload.Password)
+	if password == "" {
+		password = strings.TrimSpace(payload.Token)
+	}
+	digest := sha256.Sum256([]byte(password))
+	if subtle.ConstantTimeCompare(digest[:], a.passwordDigest[:]) != 1 {
 		a.recordLoginFailure(source)
-		writeError(w, http.StatusUnauthorized, "invalid_admin_token", "管理员令牌不正确")
+		writeError(w, http.StatusUnauthorized, "invalid_admin_password", "管理密码不正确")
 		return
 	}
 
-	sessionID, expiresAt, err := a.createSession()
+	ttl := adminSessionTTL
+	if payload.Remember {
+		ttl = persistentSessionTTL
+	}
+	sessionID, expiresAt, err := a.createSession(ttl)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "session_creation_failed", "无法创建管理员会话，请重试")
 		return
@@ -206,13 +220,95 @@ func (a *adminAuth) login(w http.ResponseWriter, r *http.Request) {
 	a.clearLoginFailures(source)
 	http.SetCookie(w, &http.Cookie{
 		Name: adminSessionCookie, Value: sessionID, Path: "/api/v1", HttpOnly: true,
-		Secure: requestIsSecure(r), SameSite: http.SameSiteStrictMode,
-		MaxAge: int(adminSessionTTL.Seconds()), Expires: expiresAt,
+		Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode,
+		MaxAge: int(ttl.Seconds()), Expires: expiresAt,
 	})
 	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
 }
 
-func (a *adminAuth) createSession() (string, time.Time, error) {
+func (a *adminAuth) connect(w http.ResponseWriter, r *http.Request) {
+	if !a.required {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+	if err := r.ParseForm(); err != nil {
+		redirectAuthError(w, r, "invalid_request")
+		return
+	}
+	target, ok := normalizeConnectionAddress(r.FormValue("address"))
+	if !ok {
+		redirectAuthError(w, r, "invalid_address")
+		return
+	}
+	current, ok := canonicalOrigin(requestScheme(r), requestHost(r))
+	if !ok {
+		redirectAuthError(w, r, "invalid_address")
+		return
+	}
+	if !strings.EqualFold(target, current) {
+		redirectAuthError(w, r, "invalid_address")
+		return
+	}
+
+	source := loginSource(r)
+	if allowed, _ := a.loginAllowed(source); !allowed {
+		redirectAuthError(w, r, "rate_limited")
+		return
+	}
+	password := strings.TrimSpace(r.FormValue("password"))
+	digest := sha256.Sum256([]byte(password))
+	if subtle.ConstantTimeCompare(digest[:], a.passwordDigest[:]) != 1 {
+		a.recordLoginFailure(source)
+		redirectAuthError(w, r, "invalid_password")
+		return
+	}
+
+	ttl := adminSessionTTL
+	if r.FormValue("remember") == "1" {
+		ttl = persistentSessionTTL
+	}
+	sessionID, expiresAt, err := a.createSession(ttl)
+	if err != nil {
+		redirectAuthError(w, r, "session_failed")
+		return
+	}
+	a.clearLoginFailures(source)
+	http.SetCookie(w, &http.Cookie{
+		Name: adminSessionCookie, Value: sessionID, Path: "/api/v1", HttpOnly: true,
+		Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode,
+		MaxAge: int(ttl.Seconds()), Expires: expiresAt,
+	})
+	http.Redirect(w, r, "/?auth=connected", http.StatusSeeOther)
+}
+
+func normalizeConnectionAddress(raw string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.User != nil || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", false
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", false
+	}
+	hostname := strings.TrimSpace(parsed.Hostname())
+	trustedLocal := strings.EqualFold(hostname, "localhost") || strings.HasSuffix(strings.ToLower(hostname), ".local")
+	if ip := net.ParseIP(hostname); ip != nil && (ip.IsLoopback() || ip.IsPrivate()) {
+		trustedLocal = true
+	}
+	if parsed.Scheme != "https" && !trustedLocal {
+		return "", false
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return "", false
+	}
+	return canonicalOrigin(parsed.Scheme, parsed.Host)
+}
+
+func redirectAuthError(w http.ResponseWriter, r *http.Request, code string) {
+	http.Redirect(w, r, "/?auth_error="+url.QueryEscape(code), http.StatusSeeOther)
+}
+
+func (a *adminAuth) createSession(ttl time.Duration) (string, time.Time, error) {
 	raw := make([]byte, 32)
 	if _, err := io.ReadFull(a.random, raw); err != nil {
 		return "", time.Time{}, err
@@ -220,7 +316,7 @@ func (a *adminAuth) createSession() (string, time.Time, error) {
 	value := base64.RawURLEncoding.EncodeToString(raw)
 	digest := sha256.Sum256([]byte(value))
 	now := a.now()
-	expiresAt := now.Add(adminSessionTTL)
+	expiresAt := now.Add(ttl)
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -238,7 +334,7 @@ func (a *adminAuth) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: adminSessionCookie, Value: "", Path: "/api/v1", HttpOnly: true,
-		Secure: requestIsSecure(r), SameSite: http.SameSiteStrictMode,
+		Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode,
 		MaxAge: -1, Expires: time.Unix(1, 0).UTC(),
 	})
 	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})

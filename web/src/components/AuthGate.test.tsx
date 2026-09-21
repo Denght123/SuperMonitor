@@ -22,6 +22,7 @@ describe('AuthGate', () => {
   afterEach(() => {
     act(() => root.unmount())
     container.remove()
+    window.history.replaceState({}, '', '/')
     vi.unstubAllGlobals()
   })
 
@@ -48,28 +49,41 @@ describe('AuthGate', () => {
     })
   }
 
-  it('unlocks the console after a valid administrator token exchange', async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ required: true, authenticated: false }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ authenticated: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+  it('prepares a same-origin connection form without storing the password', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ required: true, authenticated: false }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
 
     await renderGate()
     const heading = await find<HTMLHeadingElement>('h1')
-    expect(heading.textContent).toBe('管理员验证')
-    expect(container.textContent).toContain('至少 24 个字符，区分大小写。')
+    expect(heading.textContent).toBe('连接管理服务')
+    expect(container.textContent).toContain('至少 12 个字符，区分大小写。')
 
-    const input = container.querySelector<HTMLInputElement>('#admin-token')
-    if (!input) throw new Error('Administrator token input not found')
-    setInputValue(input, '123456789012345678901234')
+    const address = container.querySelector<HTMLInputElement>('#connection-address')
+    const password = container.querySelector<HTMLInputElement>('#admin-password')
+    const form = container.querySelector<HTMLFormElement>('form')
+    if (!address || !password || !form) throw new Error('Connection form not found')
+    expect(address.value).toBe(window.location.origin)
+    expect(form.action).toBe(`${window.location.origin}/api/v1/auth/connect`)
+    expect(password.getAttribute('name')).toBe('password')
+    expect(password.getAttribute('minlength')).toBe('12')
+    setInputValue(password, 'correct-horse')
 
     const submit = container.querySelector<HTMLButtonElement>('button[type="submit"]')
     if (!submit) throw new Error('Submit button not found')
-    act(() => submit.click())
+    expect(submit.disabled).toBe(false)
+    expect(window.localStorage.length).toBe(0)
+    expect(window.sessionStorage.length).toBe(0)
+  })
 
+  it('shows connection feedback after a successful form login', async () => {
+    window.history.replaceState({}, '', '/?auth=connected')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ required: true, authenticated: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+
+    await renderGate()
     await find('[role="status"]')
     expect(container.textContent).toContain('受保护控制台')
-    expect(container.querySelector('[role="status"]')?.textContent).toContain('管理员验证成功')
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('连接成功')
+    expect(window.location.search).toBe('')
   })
 
   it('returns to the login gate when an authenticated API reports 401', async () => {
@@ -79,8 +93,18 @@ describe('AuthGate', () => {
 
     act(() => window.dispatchEvent(new Event(authenticationRequiredEvent)))
     const heading = await find<HTMLHeadingElement>('h1')
-    expect(heading.textContent).toBe('管理员验证')
+    expect(heading.textContent).toBe('连接管理服务')
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('管理会话已过期')
+  })
+
+  it('explains a rejected password returned by the server', async () => {
+    window.history.replaceState({}, '', '/?auth_error=invalid_password')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ required: true, authenticated: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+
+    await renderGate()
+    await find<HTMLHeadingElement>('h1')
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('管理密码不正确')
+    expect(window.location.search).toBe('')
   })
 
   it('provides a labelled recovery action when the service is unavailable', async () => {

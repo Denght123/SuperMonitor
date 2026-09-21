@@ -17,15 +17,15 @@ describe('api.deleteAccount', () => {
 describe('administrator authentication API', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('exchanges the token through same-origin credentials without persisting it', async () => {
+  it('exchanges the password through same-origin credentials without persisting it', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ authenticated: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(api.login('a-long-administrator-token')).resolves.toEqual({ authenticated: true })
+    await expect(api.login('a-strong-administrator-password')).resolves.toEqual({ authenticated: true })
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/auth/session', expect.objectContaining({
       method: 'POST',
       credentials: 'same-origin',
-      body: JSON.stringify({ token: 'a-long-administrator-token' }),
+      body: JSON.stringify({ password: 'a-strong-administrator-password', remember: true }),
     }))
   })
 })

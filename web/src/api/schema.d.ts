@@ -36,6 +36,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Browser form login for a user-selected SuperMonitor address. Passwords are exchanged for an HttpOnly session and never placed in a URL. */
+        post: operations["connectAuthenticationSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/overview": {
         parameters: {
             query?: never;
@@ -648,8 +665,13 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description Administrator token containing at least 24 Unicode characters */
-                    token: string;
+                    /** @description Administrator password containing at least 12 Unicode characters */
+                    password: string;
+                    /**
+                     * @description Keep the browser session for 30 days instead of 12 hours
+                     * @default true
+                     */
+                    remember?: boolean;
                 };
             };
         };
@@ -663,7 +685,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuthStatus"];
                 };
             };
-            /** @description Administrator token is invalid */
+            /** @description Administrator password is invalid */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -689,6 +711,34 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AuthStatus"];
                 };
+            };
+        };
+    };
+    connectAuthenticationSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": {
+                    /** Format: uri */
+                    address: string;
+                    password: string;
+                    /** @enum {string} */
+                    remember?: "1";
+                };
+            };
+        };
+        responses: {
+            /** @description Redirect to the console or back to the login gate with a non-sensitive error code */
+            303: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

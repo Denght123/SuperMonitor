@@ -15,7 +15,7 @@ type Config struct {
 	DataDir             string
 	Environment         string
 	LogFile             string
-	AdminToken          string
+	AdminPassword       string
 	SyncTimeout         time.Duration
 	AllowInsecureRemote bool
 }
@@ -32,12 +32,17 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("SUPMON_ALLOW_INSECURE_REMOTE must be true or false")
 		}
 	}
+	adminPassword := strings.TrimSpace(os.Getenv("SUPMON_ADMIN_PASSWORD"))
+	if adminPassword == "" {
+		// Backward compatibility for deployments created before v0.9.0.
+		adminPassword = strings.TrimSpace(os.Getenv("SUPMON_ADMIN_TOKEN"))
+	}
 	cfg := Config{
 		Listen:              envOr("SUPMON_LISTEN", "127.0.0.1:8080"),
 		DataDir:             envOr("SUPMON_DATA_DIR", "./data"),
 		Environment:         envOr("SUPMON_ENVIRONMENT", "local"),
 		LogFile:             envOr("SUPMON_LOG_FILE", ""),
-		AdminToken:          envOr("SUPMON_ADMIN_TOKEN", ""),
+		AdminPassword:       adminPassword,
 		SyncTimeout:         syncTimeout,
 		AllowInsecureRemote: allowInsecureRemote,
 	}
@@ -48,17 +53,16 @@ func Load() (Config, error) {
 	if strings.TrimSpace(cfg.DataDir) == "" {
 		return Config{}, fmt.Errorf("SUPMON_DATA_DIR must not be empty")
 	}
-	cfg.AdminToken = strings.TrimSpace(cfg.AdminToken)
 	cfg.LogFile = strings.TrimSpace(cfg.LogFile)
-	if cfg.AdminToken != "" && (!utf8.ValidString(cfg.AdminToken) || utf8.RuneCountInString(cfg.AdminToken) < 24) {
-		return Config{}, fmt.Errorf("SUPMON_ADMIN_TOKEN must contain at least 24 Unicode characters")
+	if cfg.AdminPassword != "" && (!utf8.ValidString(cfg.AdminPassword) || utf8.RuneCountInString(cfg.AdminPassword) < 12) {
+		return Config{}, fmt.Errorf("SUPMON_ADMIN_PASSWORD must contain at least 12 Unicode characters")
 	}
 	loopback, err := isLoopbackListenAddress(cfg.Listen)
 	if err != nil {
 		return Config{}, err
 	}
-	if !loopback && cfg.AdminToken == "" && !cfg.AllowInsecureRemote {
-		return Config{}, fmt.Errorf("SUPMON_ADMIN_TOKEN is required for non-loopback SUPMON_LISTEN; set SUPMON_ALLOW_INSECURE_REMOTE=true only for an explicitly isolated deployment")
+	if !loopback && cfg.AdminPassword == "" && !cfg.AllowInsecureRemote {
+		return Config{}, fmt.Errorf("SUPMON_ADMIN_PASSWORD is required for non-loopback SUPMON_LISTEN; set SUPMON_ALLOW_INSECURE_REMOTE=true only for an explicitly isolated deployment")
 	}
 	return cfg, nil
 }

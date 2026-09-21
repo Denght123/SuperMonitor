@@ -596,7 +596,7 @@ func (s *Notifications) sendFeishu(ctx context.Context, credential feishuCredent
 		return fmt.Errorf("创建飞书请求失败")
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	req.Header.Set("User-Agent", "SuperMonitor/0.8.1")
+	req.Header.Set("User-Agent", "SuperMonitor/0.9.0")
 	resp, err := s.http.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {

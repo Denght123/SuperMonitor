@@ -31,11 +31,11 @@ type Dependencies struct {
 	Web           http.Handler
 	Logger        *slog.Logger
 	Version       string
-	AdminToken    string
+	AdminPassword string
 }
 
 func New(deps Dependencies) http.Handler {
-	auth := newAdminAuth(deps.AdminToken)
+	auth := newAdminAuth(deps.AdminPassword)
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(securityHeaders)
@@ -55,6 +55,7 @@ func New(deps Dependencies) http.Handler {
 	router.Route("/api/v1", func(api chi.Router) {
 		api.Get("/auth/status", auth.status)
 		api.Post("/auth/session", auth.login)
+		api.Post("/auth/connect", auth.connect)
 		api.Delete("/auth/session", auth.logout)
 		api.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 			writeError(w, http.StatusNotFound, "route_not_found", "请求的 API 路径不存在")

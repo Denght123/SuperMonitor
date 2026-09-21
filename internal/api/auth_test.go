@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 )
 
-const testAdminToken = "a-long-random-administrator-token"
+const testAdminPassword = "a-strong-administrator-password"
 
 func TestAdminAuthProtectsAPIAndCreatesRandomHttpOnlySession(t *testing.T) {
-	auth := newAdminAuth(testAdminToken)
+	auth := newAdminAuth(testAdminPassword)
 	protected := auth.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -23,8 +24,8 @@ func TestAdminAuthProtectsAPIAndCreatesRandomHttpOnlySession(t *testing.T) {
 		t.Fatalf("unauthorized status = %d", unauthorized.Code)
 	}
 
-	cookie := loginCookie(t, auth, testAdminToken, "192.0.2.10:41000")
-	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Value == testAdminToken {
+	cookie := loginCookie(t, auth, testAdminPassword, "192.0.2.10:41000")
+	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.Value == testAdminPassword {
 		t.Fatalf("unsafe session cookie: %+v", cookie)
 	}
 	if cookie.MaxAge != int(adminSessionTTL.Seconds()) || cookie.Expires.IsZero() {
@@ -42,10 +43,10 @@ func TestAdminAuthProtectsAPIAndCreatesRandomHttpOnlySession(t *testing.T) {
 
 func TestAdminSessionsAreUniqueExpireAndDoNotSurviveAuthRestart(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
-	auth := newAdminAuth(testAdminToken)
+	auth := newAdminAuth(testAdminPassword)
 	auth.now = func() time.Time { return now }
-	first := loginCookie(t, auth, testAdminToken, "192.0.2.10:41000")
-	second := loginCookie(t, auth, testAdminToken, "192.0.2.10:41001")
+	first := loginCookie(t, auth, testAdminPassword, "192.0.2.10:41000")
+	second := loginCookie(t, auth, testAdminPassword, "192.0.2.10:41001")
 	if first.Value == second.Value {
 		t.Fatal("separate logins reused a session identifier")
 	}
@@ -56,13 +57,13 @@ func TestAdminSessionsAreUniqueExpireAndDoNotSurviveAuthRestart(t *testing.T) {
 		t.Fatalf("live session authentication = %v", got)
 	}
 
-	restarted := newAdminAuth(testAdminToken)
+	restarted := newAdminAuth(testAdminPassword)
 	if got := restarted.authenticateRequest(request); got != authenticationDenied {
 		t.Fatalf("session survived auth restart: %v", got)
 	}
 	rotated := newAdminAuth("a-different-random-administrator-token")
 	if got := rotated.authenticateRequest(request); got != authenticationDenied {
-		t.Fatalf("session survived token rotation: %v", got)
+		t.Fatalf("session survived password rotation: %v", got)
 	}
 
 	now = now.Add(adminSessionTTL)
@@ -72,8 +73,8 @@ func TestAdminSessionsAreUniqueExpireAndDoNotSurviveAuthRestart(t *testing.T) {
 }
 
 func TestAdminLogoutRevokesCurrentSession(t *testing.T) {
-	auth := newAdminAuth(testAdminToken)
-	cookie := loginCookie(t, auth, testAdminToken, "192.0.2.10:41000")
+	auth := newAdminAuth(testAdminPassword)
+	cookie := loginCookie(t, auth, testAdminPassword, "192.0.2.10:41000")
 	handler := auth.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/auth/session" {
 			auth.logout(w, r)
@@ -105,8 +106,8 @@ func TestAdminLogoutRevokesCurrentSession(t *testing.T) {
 }
 
 func TestCookieWritesRequireSameOriginButBearerDoesNot(t *testing.T) {
-	auth := newAdminAuth(testAdminToken)
-	cookie := loginCookie(t, auth, testAdminToken, "192.0.2.10:41000")
+	auth := newAdminAuth(testAdminPassword)
+	cookie := loginCookie(t, auth, testAdminPassword, "192.0.2.10:41000")
 	handler := auth.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -141,7 +142,7 @@ func TestCookieWritesRequireSameOriginButBearerDoesNot(t *testing.T) {
 	}
 
 	bearer := httptest.NewRequest(http.MethodDelete, "http://console.example/api/v1/accounts/example", nil)
-	bearer.Header.Set("Authorization", "Bearer "+testAdminToken)
+	bearer.Header.Set("Authorization", "Bearer "+testAdminPassword)
 	bearerResponse := httptest.NewRecorder()
 	handler.ServeHTTP(bearerResponse, bearer)
 	if bearerResponse.Code != http.StatusNoContent {
@@ -150,7 +151,7 @@ func TestCookieWritesRequireSameOriginButBearerDoesNot(t *testing.T) {
 }
 
 func TestAdminAuthOnlyExemptsExactPublicRoutes(t *testing.T) {
-	handler := newAdminAuth(testAdminToken).middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := newAdminAuth(testAdminPassword).middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	tests := []struct {
@@ -162,6 +163,8 @@ func TestAdminAuthOnlyExemptsExactPublicRoutes(t *testing.T) {
 		{http.MethodGet, "/", http.StatusNoContent},
 		{http.MethodGet, "/api/v1/auth/status", http.StatusNoContent},
 		{http.MethodPost, "/api/v1/auth/session", http.StatusNoContent},
+		{http.MethodPost, "/api/v1/auth/connect", http.StatusNoContent},
+		{http.MethodGet, "/api/v1/auth/connect", http.StatusUnauthorized},
 		{http.MethodGet, kiroOAuthCallbackPath, http.StatusNoContent},
 		{http.MethodPost, kiroOAuthCallbackPath, http.StatusUnauthorized},
 		{http.MethodGet, kiroOAuthCallbackPath + "/extra", http.StatusUnauthorized},
@@ -190,7 +193,7 @@ func TestAdminAuthOnlyExemptsExactPublicRoutes(t *testing.T) {
 
 func TestAdminLoginRateLimitIsScopedBySourceAndExpires(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
-	auth := newAdminAuth(testAdminToken)
+	auth := newAdminAuth(testAdminPassword)
 	auth.now = func() time.Time { return now }
 
 	for attempt := 0; attempt < loginMaxFailures; attempt++ {
@@ -199,29 +202,98 @@ func TestAdminLoginRateLimitIsScopedBySourceAndExpires(t *testing.T) {
 			t.Fatalf("attempt %d status = %d", attempt+1, response.Code)
 		}
 	}
-	limited := performLogin(auth, testAdminToken, "192.0.2.10:41001")
+	limited := performLogin(auth, testAdminPassword, "192.0.2.10:41001")
 	if limited.Code != http.StatusTooManyRequests || limited.Header().Get("Retry-After") == "" {
 		t.Fatalf("rate-limited response = %d retry-after=%q", limited.Code, limited.Header().Get("Retry-After"))
 	}
 
-	otherSource := performLogin(auth, testAdminToken, "192.0.2.11:41000")
+	otherSource := performLogin(auth, testAdminPassword, "192.0.2.11:41000")
 	if otherSource.Code != http.StatusOK {
 		t.Fatalf("different source status = %d", otherSource.Code)
 	}
 
 	now = now.Add(loginLockoutDuration + time.Second)
-	recovered := performLogin(auth, testAdminToken, "192.0.2.10:41002")
+	recovered := performLogin(auth, testAdminPassword, "192.0.2.10:41002")
 	if recovered.Code != http.StatusOK {
 		t.Fatalf("post-lockout status = %d body=%s", recovered.Code, recovered.Body.String())
 	}
 }
 
-func TestAdminAuthAcceptsBearerTokenForAutomation(t *testing.T) {
-	handler := newAdminAuth(testAdminToken).middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+func TestAdminConnectAcceptsAddressAndPasswordWithoutPersistingPassword(t *testing.T) {
+	auth := newAdminAuth(testAdminPassword)
+	form := url.Values{
+		"address":  {"https://console.example"},
+		"password": {testAdminPassword},
+		"remember": {"1"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "https://console.example/api/v1/auth/connect", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.RemoteAddr = "192.0.2.10:41000"
+	response := httptest.NewRecorder()
+	auth.connect(response, request)
+
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/?auth=connected" {
+		t.Fatalf("connect response = %d location=%q body=%s", response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("connect cookies = %d", len(cookies))
+	}
+	cookie := cookies[0]
+	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("unsafe connect cookie: %+v", cookie)
+	}
+	if cookie.Value == testAdminPassword || cookie.MaxAge != int(persistentSessionTTL.Seconds()) {
+		t.Fatalf("connect cookie leaked password or has wrong lifetime: %+v", cookie)
+	}
+}
+
+func TestAdminConnectRejectsMismatchedAddressWithoutForwardingPassword(t *testing.T) {
+	auth := newAdminAuth(testAdminPassword)
+	form := url.Values{
+		"address":  {"https://attacker.example"},
+		"password": {testAdminPassword},
+	}
+	request := httptest.NewRequest(http.MethodPost, "https://console.example/api/v1/auth/connect", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	auth.connect(response, request)
+
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/?auth_error=invalid_address" {
+		t.Fatalf("connect response = %d location=%q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestNormalizeConnectionAddressRequiresHTTPSOutsideTrustedNetworks(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want string
+		ok   bool
+	}{
+		{"https://monitor.example/", "https://monitor.example", true},
+		{"http://127.0.0.1:8080", "http://127.0.0.1:8080", true},
+		{"http://192.168.1.20:8080", "http://192.168.1.20:8080", true},
+		{"http://monitor.local:8080", "http://monitor.local:8080", true},
+		{"http://monitor.example", "", false},
+		{"https://monitor.example/subpath", "", false},
+		{"https://user@monitor.example", "", false},
+	}
+	for _, test := range tests {
+		t.Run(test.raw, func(t *testing.T) {
+			got, ok := normalizeConnectionAddress(test.raw)
+			if ok != test.ok || got != test.want {
+				t.Fatalf("normalizeConnectionAddress(%q) = %q, %t; want %q, %t", test.raw, got, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
+func TestAdminAuthAcceptsBearerPasswordForAutomation(t *testing.T) {
+	handler := newAdminAuth(testAdminPassword).middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	request := httptest.NewRequest(http.MethodGet, "http://console.example/api/v1/sync/status", nil)
-	request.Header.Set("Authorization", "bearer "+testAdminToken)
+	request.Header.Set("Authorization", "bearer "+testAdminPassword)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent {
@@ -249,17 +321,17 @@ func TestAPIResponsesDisableCachingAndVaryByCredentials(t *testing.T) {
 	}
 }
 
-func loginCookie(t *testing.T, auth *adminAuth, token, remoteAddr string) *http.Cookie {
+func loginCookie(t *testing.T, auth *adminAuth, password, remoteAddr string) *http.Cookie {
 	t.Helper()
-	response := performLogin(auth, token, remoteAddr)
+	response := performLogin(auth, password, remoteAddr)
 	if response.Code != http.StatusOK || len(response.Result().Cookies()) != 1 {
 		t.Fatalf("login status/cookies = %d/%d body=%s", response.Code, len(response.Result().Cookies()), response.Body.String())
 	}
 	return response.Result().Cookies()[0]
 }
 
-func performLogin(auth *adminAuth, token, remoteAddr string) *httptest.ResponseRecorder {
-	request := httptest.NewRequest(http.MethodPost, "http://console.example/api/v1/auth/session", bytes.NewBufferString(`{"token":"`+token+`"}`))
+func performLogin(auth *adminAuth, password, remoteAddr string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(http.MethodPost, "http://console.example/api/v1/auth/session", bytes.NewBufferString(`{"password":"`+password+`"}`))
 	request.RemoteAddr = remoteAddr
 	response := httptest.NewRecorder()
 	auth.login(response, request)

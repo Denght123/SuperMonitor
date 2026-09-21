@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: SuperMonitor API
-  version: 0.8.1
+  version: 0.9.0
   description: Monitoring-only API. It intentionally exposes no model proxy endpoints.
 servers:
   - url: /api/v1
@@ -29,13 +29,17 @@ paths:
           application/json:
             schema:
               type: object
-              required: [token]
+              required: [password]
               properties:
-                token:
+                password:
                   type: string
-                  minLength: 24
+                  minLength: 12
                   writeOnly: true
-                  description: Administrator token containing at least 24 Unicode characters
+                  description: Administrator password containing at least 12 Unicode characters
+                remember:
+                  type: boolean
+                  default: true
+                  description: Keep the browser session for 30 days instead of 12 hours
       responses:
         "200":
           description: HttpOnly administrator session created
@@ -43,7 +47,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AuthStatus" }
         "401":
-          description: Administrator token is invalid
+          description: Administrator password is invalid
     delete:
       operationId: deleteAuthenticationSession
       responses:
@@ -52,6 +56,25 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AuthStatus" }
+  /auth/connect:
+    post:
+      security: []
+      operationId: connectAuthenticationSession
+      description: Browser form login for a user-selected SuperMonitor address. Passwords are exchanged for an HttpOnly session and never placed in a URL.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [address, password]
+              properties:
+                address: { type: string, format: uri }
+                password: { type: string, minLength: 12, writeOnly: true }
+                remember: { type: string, enum: ["1"] }
+      responses:
+        "303":
+          description: Redirect to the console or back to the login gate with a non-sensitive error code
   /overview:
     get:
       operationId: getOverview
@@ -441,11 +464,11 @@ components:
       type: apiKey
       in: cookie
       name: supermonitor_admin
-      description: Server-issued 12-hour HttpOnly administrator session
+      description: Server-issued HttpOnly administrator session (12 hours or 30 days when remembered)
     BearerAuth:
       type: http
       scheme: bearer
-      description: SUPMON_ADMIN_TOKEN for API automation
+      description: SUPMON_ADMIN_PASSWORD for API automation
   schemas:
     AuthStatus:
       type: object

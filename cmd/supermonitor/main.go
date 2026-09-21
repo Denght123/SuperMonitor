@@ -40,7 +40,7 @@ func main() {
 	if logCloser != nil {
 		defer logCloser.Close()
 	}
-	if cfg.AdminToken == "" && cfg.AllowInsecureRemote {
+	if cfg.AdminPassword == "" && cfg.AllowInsecureRemote {
 		logger.Warn("administrator authentication disabled for non-loopback listener", "address", cfg.Listen)
 	}
 
@@ -81,7 +81,7 @@ func main() {
 		Web:           webui.Handler(),
 		Logger:        logger,
 		Version:       version,
-		AdminToken:    cfg.AdminToken,
+		AdminPassword: cfg.AdminPassword,
 	})
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
 	defer stopScheduler()

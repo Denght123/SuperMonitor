@@ -2,7 +2,7 @@
 
 SuperMonitor is an open-source, self-hosted control plane for monitoring AI and coding-agent quotas, credits, balances, refresh windows, and usage history.
 
-> Current status: **v0.8.1 resilient synchronization, authenticated remote access, and real usage history**. Connected accounts use provider-specific OAuth, credential-file, API-key, access-key, Cookie, or session-token flows; unsupported data is never replaced with demo quota.
+> Current status: **v0.9.0 custom-address password login, resilient synchronization, and real usage history**. Connected accounts use provider-specific OAuth, credential-file, API-key, access-key, Cookie, or session-token flows; unsupported data is never replaced with demo quota.
 
 ## Principles
 
@@ -77,27 +77,28 @@ npm ci
 npm run api:generate
 npm run build
 cd ..
-go build -trimpath -ldflags "-s -w -X main.version=v0.8.1" -o bin/supermonitor-v0.8.1.exe ./cmd/supermonitor
+go build -trimpath -ldflags "-s -w -X main.version=v0.9.0" -o bin/supermonitor-v0.9.0.exe ./cmd/supermonitor
 ```
 
 Or use Docker Compose:
 
 ```powershell
+$env:SUPMON_ADMIN_PASSWORD = Read-Host "SuperMonitor 管理密码（至少 12 个字符）" -MaskInput
 docker compose up --build
 ```
 
-The provided Compose file publishes only `127.0.0.1:8080`, so its explicit insecure-remote opt-in applies only inside the container boundary. If you change the host binding so other machines can reach it, set `SUPMON_ADMIN_TOKEN` and remove that opt-in.
+The provided Compose file publishes only `127.0.0.1:8080`, but still requires `SUPMON_ADMIN_PASSWORD` because the application listens on the container network. Put the password in an uncommitted `.env` file or export it before running Compose. Set `SUPMON_ALLOW_INSECURE_REMOTE=true` only for a deliberately isolated deployment.
 
 The image itself listens on `0.0.0.0:8080` inside the container. A direct `docker run` therefore refuses to start without administrator protection, even when Docker publishes the port only on loopback. The recommended direct-run setup is:
 
 ```powershell
-docker build --build-arg VERSION=v0.8.1 -t supermonitor:v0.8.1 .
-$token = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLower()
+docker build --build-arg VERSION=v0.9.0 -t supermonitor:v0.9.0 .
+$password = Read-Host "SuperMonitor 管理密码（至少 12 个字符）" -MaskInput
 docker run --rm --name supermonitor `
   -p 127.0.0.1:8080:8080 `
-  -e "SUPMON_ADMIN_TOKEN=$token" `
+  -e "SUPMON_ADMIN_PASSWORD=$password" `
   -v supermonitor-data:/app/data `
-  supermonitor:v0.8.1
+  supermonitor:v0.9.0
 ```
 
 For a deliberately isolated loopback-only container, `SUPMON_ALLOW_INSECURE_REMOTE=true` is an explicit alternative. Do not use that escape hatch when the published port, reverse proxy, or container network is reachable by untrusted clients.
@@ -106,9 +107,11 @@ For a deliberately isolated loopback-only container, `SUPMON_ALLOW_INSECURE_REMO
 
 Never commit `.env`, API keys, OAuth tokens, SQLite databases, backup bundles, logs, or exported authentication files. Use `.env.example` only as a field reference.
 
-Local access remains passwordless when `SUPMON_ADMIN_TOKEN` is empty. Non-loopback listeners require a random token of at least 24 Unicode characters unless `SUPMON_ALLOW_INSECURE_REMOTE=true` explicitly acknowledges an isolated outer security boundary. Terminate HTTPS at the service or a trusted reverse proxy. The browser exchanges the token for a server-expiring 12-hour, HttpOnly, SameSite session; the token is never stored in browser local storage. API automation may alternatively send `Authorization: Bearer <token>`.
+Local access remains passwordless when `SUPMON_ADMIN_PASSWORD` is empty. Non-loopback listeners require a management password of at least 12 Unicode characters unless `SUPMON_ALLOW_INSECURE_REMOTE=true` explicitly acknowledges an isolated outer security boundary. `SUPMON_ADMIN_TOKEN` remains a deprecated fallback for upgrades. Terminate HTTPS at the service or a trusted reverse proxy.
 
-Example token generation:
+The login page follows the CPA connection pattern: enter the SuperMonitor address and management password. The current deployment address is filled automatically; entering another trusted SuperMonitor address submits directly to that instance and moves the browser there. The password is never placed in the URL or browser storage. It is exchanged for a random HttpOnly, SameSite session lasting 12 hours, or 30 days when “保持登录” is selected. API automation may alternatively send `Authorization: Bearer <password>`.
+
+Example strong-password generation:
 
 ```powershell
 [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLower()

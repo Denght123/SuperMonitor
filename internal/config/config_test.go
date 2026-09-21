@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestLoadAllowsLoopbackWithoutAdministratorToken(t *testing.T) {
+func TestLoadAllowsLoopbackWithoutAdministratorPassword(t *testing.T) {
 	for _, listen := range []string{"127.0.0.1:8080", "localhost:8080", "[::1]:8080"} {
 		t.Run(listen, func(t *testing.T) {
 			setValidEnvironment(t)
@@ -19,21 +19,21 @@ func TestLoadAllowsLoopbackWithoutAdministratorToken(t *testing.T) {
 			if cfg.Listen != listen {
 				t.Fatalf("Listen = %q, want %q", cfg.Listen, listen)
 			}
-			if cfg.AdminToken != "" {
-				t.Fatalf("AdminToken = %q, want empty", cfg.AdminToken)
+			if cfg.AdminPassword != "" {
+				t.Fatalf("AdminPassword = %q, want empty", cfg.AdminPassword)
 			}
 		})
 	}
 }
 
-func TestLoadRejectsRemoteListenWithoutAdministratorToken(t *testing.T) {
+func TestLoadRejectsRemoteListenWithoutAdministratorPassword(t *testing.T) {
 	for _, listen := range []string{"0.0.0.0:8080", "192.168.1.20:8080"} {
 		t.Run(listen, func(t *testing.T) {
 			setValidEnvironment(t)
 			t.Setenv("SUPMON_LISTEN", listen)
 
 			_, err := Load()
-			assertErrorContains(t, err, "SUPMON_ADMIN_TOKEN is required")
+			assertErrorContains(t, err, "SUPMON_ADMIN_PASSWORD is required")
 		})
 	}
 }
@@ -42,13 +42,13 @@ func TestLoadAllowsProtectedOrExplicitlyIsolatedRemoteListen(t *testing.T) {
 	tests := []struct {
 		name          string
 		listen        string
-		adminToken    string
+		adminPassword string
 		allowInsecure string
 	}{
 		{
-			name:       "strong administrator token",
-			listen:     "0.0.0.0:8080",
-			adminToken: strings.Repeat("强", 24),
+			name:          "strong administrator password",
+			listen:        "0.0.0.0:8080",
+			adminPassword: strings.Repeat("强", 12),
 		},
 		{
 			name:          "explicit insecure remote opt-in",
@@ -61,7 +61,7 @@ func TestLoadAllowsProtectedOrExplicitlyIsolatedRemoteListen(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			setValidEnvironment(t)
 			t.Setenv("SUPMON_LISTEN", test.listen)
-			t.Setenv("SUPMON_ADMIN_TOKEN", test.adminToken)
+			t.Setenv("SUPMON_ADMIN_PASSWORD", test.adminPassword)
 			t.Setenv("SUPMON_ALLOW_INSECURE_REMOTE", test.allowInsecure)
 
 			cfg, err := Load()
@@ -83,10 +83,10 @@ func TestLoadRejectsInvalidSecurityAndTimeoutSettings(t *testing.T) {
 		wantMessage string
 	}{
 		{
-			name:        "weak administrator token",
-			key:         "SUPMON_ADMIN_TOKEN",
-			value:       strings.Repeat("a", 23),
-			wantMessage: "at least 24 Unicode characters",
+			name:        "weak administrator password",
+			key:         "SUPMON_ADMIN_PASSWORD",
+			value:       strings.Repeat("a", 11),
+			wantMessage: "at least 12 Unicode characters",
 		},
 		{
 			name:        "invalid insecure remote boolean",
@@ -156,9 +156,23 @@ func setValidEnvironment(t *testing.T) {
 	t.Setenv("SUPMON_DATA_DIR", `G:\SuperMonitor\.tmp\config-test-data`)
 	t.Setenv("SUPMON_ENVIRONMENT", "test")
 	t.Setenv("SUPMON_LOG_FILE", "")
+	t.Setenv("SUPMON_ADMIN_PASSWORD", "")
 	t.Setenv("SUPMON_ADMIN_TOKEN", "")
 	t.Setenv("SUPMON_SYNC_TIMEOUT", "10m")
 	t.Setenv("SUPMON_ALLOW_INSECURE_REMOTE", "false")
+}
+
+func TestLoadUsesLegacyAdministratorTokenWhenPasswordIsUnset(t *testing.T) {
+	setValidEnvironment(t)
+	t.Setenv("SUPMON_ADMIN_TOKEN", "legacy-administrator-secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AdminPassword != "legacy-administrator-secret" {
+		t.Fatalf("AdminPassword = %q", cfg.AdminPassword)
+	}
 }
 
 func assertErrorContains(t *testing.T, err error, want string) {
